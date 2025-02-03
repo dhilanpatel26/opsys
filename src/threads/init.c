@@ -134,6 +134,7 @@ pintos_init (void)
     run_actions (argv);
   } else {
     // TODO: no command line passed to kernel. Run interactively 
+    pintos_assignment0_shell();
   }
 
   /* Finish up. */
@@ -141,6 +142,44 @@ pintos_init (void)
   thread_exit ();
 }
 
+// assignment 0 pintos shell
+void pintos_assignment0_shell(void) {
+  // allowing up to 63 characters to be entered
+  char buffer[64]; int index;
+
+  while (true) {
+    index = 0;
+    printf("CS318> "); 
+
+    while (true) { // let user input something
+      char c = input_getc();
+      if (c == '\n' || c == '\r') {  
+        buffer[index] = '\0';
+        break;
+      }
+      if (index < sizeof(buffer) - 1) {
+        buffer[index++] = c;
+        putchar(c); 
+      } else {
+        // Buffer is too full, no more input please...  :)
+        printf("\nBuffer overflow... that's too many characters!\n");
+        break;
+      }
+    }
+    printf("\n");
+
+    if (strcmp(buffer, "whoami") == 0) {
+      printf("Katherine\n");
+    } else if (strcmp(buffer, "exit") == 0) {
+      printf("quitting shell...\n");
+      //exit theshell
+      return;  
+    } else {
+      printf("invalid command\n");
+    }
+  }
+}
+
 /* Clear the "BSS", a segment that should be initialized to
    zeros.  It isn't actually stored on disk or zeroed by the
    kernel loader, so we have to zero it ourselves.
