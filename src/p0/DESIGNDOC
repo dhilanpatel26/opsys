@@ -8,7 +8,7 @@
 
 >> Fill in your name and email address.
 
-FirstName LastName <email@domain.example>
+Katherine Forbes <kforbes6@jhu.edu>
 
 ---- PRELIMINARIES ----
 
@@ -32,25 +32,48 @@ FirstName LastName <email@domain.example>
 ---- QUESTIONS: BIOS ---- 
 >> B1: What is the first instruction that gets executed?
 
+ljmp   $0x3630,$0xf000e05b
+
 >> B2: At which physical address is this instruction located?
+
+[f000:fff0] or 0xFFFF0
 
 >> B3: Can you guess why the first instruction is like this?
 
+The first instruction jumps to the address 0xf000e05b, which will continue to execute the rest of the BIOS code.
+
 >> B4: What are the next three instructions?
+
+1. 0xfe05b:	cmpw   $0xffc8,%cs:(%esi)
+2. 0xfe062:	jne    0xd241d076
+3. 0xfe066:	xor    %edx,%edx
 
 ---- QUESTIONS: BOOTLOADER ---- 
 >> B5: How does the bootloader read disk sectors? In particular, what BIOS interrupt
 is used?
 
+The bootloader can read disk sectors using the BIOS interrupt 0x13, which we can see being used in the read_sector function.
+
 >> B6: How does the bootloader decides whether it successfully finds the Pintos kernel?
+
+It reads the partition table on each system hard disk and scans for a partition of type 0x20, which is the type that is used for a Pintos kernel. It uses this specific instruction to check: cmpb $0x20, %es:4(%si)
 
 >> B7: What happens when the bootloader could not find the Pintos kernel?
 
+If the bootloader can not find the Pintos kernel, it will call "puts" and print "Not found". Then, it will call the BIOS interrupt 0x18 to 
+create a software interrupt and notify BIOS the boot failed.
+
 >> B8: At what point and how exactly does the bootloader transfer control to the Pintos kernel?
+
+If the bootloader can succesffuly find the pintos kernel, it will run load_kernel. Once all of the sectors of the kernel
+are loaded, the control will be transferred to the Pintos kernel. This is done by using the start
+address out of the ELF header and converting it from a  32-bit linear address into a 16:16 segment:offset address for
+real mode, then jumping to the converted address.
 
 ---- QUESTIONS: KERNEL ---- 
 >> B9: At the entry of pintos_init(), what is the value of expression 
 init_page_dir[pd_no(ptov(0))] in hexadecimal format?
+
 
 >> B10: When palloc_get_page() is called for the first time,
 
