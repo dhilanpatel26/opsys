@@ -125,7 +125,17 @@ found using the register eax:
 >> `struct' member, global or static variable, `typedef', or
 >> enumeration.  Identify the purpose of each in 25 words or less.
 
+I did not use any new data structures or global/static variables for my kernel monitor.
+
 ---- ALGORITHMS ----
 >> C2: Explain how you read and write to the console for the kernel monitor.
 
+To read in from the console, I use the function input_getc();
+This function is imported from "devices/input.c" and takes in one char at a time from console user input.
+I then check to see if the char can fit in my buffer, and if it can then I print it back out on the console
+with the function putchar(c).
+
 >> C3: Any additional enhancement you implement?
+I also added the ability to check to see if the user enters too many characters that cause
+a buffer overflow. If the user does enter too many chars, they are notified with an error message
+and the loop is broken so a new prompt can be generated for the user.
