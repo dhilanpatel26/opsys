@@ -19,6 +19,20 @@
 
 /* Number of timer ticks since OS booted. */
 static int64_t ticks;
+struct sleep_entry {
+  struct thread *thread;
+  int64_t wakeup_time;
+  struct semaphore sema;
+  struct list_elem elem;
+};
+static struct list sleep_list;
+
+bool timer_cmp(const struct list_elem *a, const struct list_elem *b, void *aux) {
+  ASSERT (aux == NULL);
+  struct sleep_entry *entry_a = list_entry(a, struct sleep_entry, elem);
+  struct sleep_entry *entry_b = list_entry(b, struct sleep_entry, elem);
+  return entry_a->wakeup_time < entry_b->wakeup_time;
+}
 
 /* Number of loops per timer tick.
    Initialized by timer_calibrate(). */
@@ -37,6 +51,7 @@ timer_init (void)
 {
   pit_configure_channel (0, 2, TIMER_FREQ);
   intr_register_ext (0x20, timer_interrupt, "8254 Timer");
+  list_init(&sleep_list);
 }
 
 /* Calibrates loops_per_tick, used to implement brief delays. */
@@ -89,11 +104,17 @@ timer_elapsed (int64_t then)
 void
 timer_sleep (int64_t ticks) 
 {
-  int64_t start = timer_ticks ();
-
   ASSERT (intr_get_level () == INTR_ON);
-  while (timer_elapsed (start) < ticks) 
-    thread_yield ();
+  int64_t start = timer_ticks ();
+  struct sleep_entry entry;
+  entry.thread = thread_current();
+  entry.wakeup_time = start + ticks;
+  sema_init(&entry.sema, 0);
+
+  enum intr_level old_level = intr_disable();
+  list_insert_ordered(&sleep_list, &entry.elem, timer_cmp, NULL);
+  intr_set_level(old_level);
+  sema_down(&entry.sema);
 }
 
 /* Sleeps for approximately MS milliseconds.  Interrupts must be
@@ -171,6 +192,16 @@ static void
 timer_interrupt (struct intr_frame *args UNUSED)
 {
   ticks++;
+  struct list_elem *e = list_begin(&sleep_list);
+  while (e != list_end(&sleep_list)) {
+    struct sleep_entry *entry = list_entry(e, struct sleep_entry, elem);
+    if (entry->wakeup_time <= ticks) {
+      sema_up(&entry->sema);
+      e = list_remove(e); // assign next element to e
+    } else {
+      break;
+    }
+  }
   thread_tick ();
 }
 
