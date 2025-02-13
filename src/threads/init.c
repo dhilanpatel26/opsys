@@ -71,6 +71,7 @@ static void locate_block_device (enum block_type, const char *name);
 #endif
 
 int pintos_init (void) NO_RETURN;
+void pintos_assignment0_shell(void);
 
 /* Pintos main entry point. */
 int
@@ -145,7 +146,7 @@ pintos_init (void)
 // assignment 0 pintos shell
 void pintos_assignment0_shell(void) {
   // allowing up to 63 characters to be entered
-  char buffer[64]; int index;
+  char buffer[64]; size_t index;
 
   while (true) {
     index = 0;
