@@ -25,7 +25,8 @@ struct sleep_entry {
   struct semaphore sema;
   struct list_elem elem;
 };
-static struct list sleep_list;
+static struct list sleep_list; // static (shared) data requires synchronization
+static struct lock sleep_list_lock;
 
 bool timer_cmp(const struct list_elem *a, const struct list_elem *b, void *aux) {
   ASSERT (aux == NULL);
@@ -52,6 +53,7 @@ timer_init (void)
   pit_configure_channel (0, 2, TIMER_FREQ);
   intr_register_ext (0x20, timer_interrupt, "8254 Timer");
   list_init(&sleep_list);
+  lock_init(&sleep_list_lock);
 }
 
 /* Calibrates loops_per_tick, used to implement brief delays. */
@@ -111,9 +113,10 @@ timer_sleep (int64_t ticks)
   entry.wakeup_time = start + ticks;
   sema_init(&entry.sema, 0);
 
-  enum intr_level old_level = intr_disable();
+  lock_acquire(&sleep_list_lock); // interrupt-safe
   list_insert_ordered(&sleep_list, &entry.elem, timer_cmp, NULL);
-  intr_set_level(old_level);
+  lock_release(&sleep_list_lock);
+
   sema_down(&entry.sema);
 }
 
@@ -191,6 +194,7 @@ timer_print_stats (void)
 static void
 timer_interrupt (struct intr_frame *args UNUSED)
 {
+  // no sync necessary, interrupt handlers are atomic
   ticks++;
   struct list_elem *e = list_begin(&sleep_list);
   while (e != list_end(&sleep_list)) {
