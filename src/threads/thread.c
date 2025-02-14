@@ -160,13 +160,15 @@ thread_tick (void)
   else
     kernel_ticks++;
 
-  t->recent_cpu = fp_add(t->recent_cpu, 1);
-  if (timer_ticks () % TIMER_FREQ == 0) {
-    update_load_avg();
-    update_recent_cpu();
-  }
-  if (timer_ticks () % 4 == 0) {
-    mlfq_update_priority();
+  if (thread_mlfqs) {
+    t->recent_cpu = fp_add(t->recent_cpu, 1);
+    if (timer_ticks () % TIMER_FREQ == 0) {
+      update_load_avg();
+      update_recent_cpu();
+    }
+    if (timer_ticks () % 4 == 0) {
+      mlfq_update_priority();
+    }
   }
 
   /* Enforce preemption. */
@@ -563,7 +565,7 @@ init_thread (struct thread *t, const char *name, int priority)
   t->status = THREAD_BLOCKED;
   strlcpy (t->name, name, sizeof t->name);
   t->stack = (uint8_t *) t + PGSIZE;
-  t->nice = !strcmp(name, "idle") ? 0 : thread_get_nice();
+  t->nice = !strcmp(name, "main") ? 0 : thread_get_nice();
   if (thread_mlfqs) {
     priority = PRI_MAX - (t->nice * 2);
     if (priority < PRI_MIN) {
