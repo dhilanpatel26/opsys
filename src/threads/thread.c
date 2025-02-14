@@ -195,7 +195,7 @@ void mlfq_update_priority(void) {
       list_push_back(&new_queue, &t->elem);
     }
 
-    // don't need to deal with "running" thread here, about to be preempted
+    // don't need to yield "running" thread here, about to be preempted
   }
 }
 
@@ -221,6 +221,11 @@ void update_load_avg(void) {
   for (int i = PRI_MIN; i < PRI_MAX + 1; i++) {
     ready_threads += list_size(&mlfq_list[i]);
   }
+  // add currently running thread if not idle thread
+  if (thread_current() != idle_thread) {
+    ready_threads++;
+  }
+
   load_avg = fp_div_int(fp_mul_int(load_avg, 59), 60)
     + fp_div_int(convert_to_fixedpoint((int)ready_threads), 60);
 }
