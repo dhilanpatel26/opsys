@@ -17,17 +17,23 @@
 #error TIMER_FREQ <= 1000 recommended
 #endif
 
-/* Number of timer ticks since OS booted. */
-static int64_t ticks;
-struct sleep_entry {
-  struct thread *thread;
-  int64_t wakeup_time;
-  struct semaphore sema;
-  struct list_elem elem;
-};
-static struct list sleep_list; // static (shared) data requires synchronization
+/* List of sleeping threads */
+static struct list sleep_list;
+/* Lock to protect sleep_list */
 static struct lock sleep_list_lock;
 
+/* Sleep thread structure */
+struct sleep_entry {
+  struct thread *thread;        /* Thread that is sleeping */
+  int64_t wakeup_time;          /* Time to wake up */
+  struct semaphore sema;        /* Semaphore to wait on */
+  struct list_elem elem;        /* List element */
+};
+
+/* Number of timer ticks since OS booted. */
+static int64_t ticks;
+
+/* Returns true if thread a should wake up before thread b. */
 bool timer_cmp(const struct list_elem *a, const struct list_elem *b, void *aux) {
   ASSERT (aux == NULL);
   struct sleep_entry *entry_a = list_entry(a, struct sleep_entry, elem);
@@ -106,6 +112,9 @@ timer_elapsed (int64_t then)
 void
 timer_sleep (int64_t ticks) 
 {
+  if (ticks <= 0)
+    return;
+
   ASSERT (intr_get_level () == INTR_ON);
   int64_t start = timer_ticks ();
   struct sleep_entry entry;
@@ -189,19 +198,19 @@ timer_print_stats (void)
 {
   printf ("Timer: %"PRId64" ticks\n", timer_ticks ());
 }
-
+
 /* Timer interrupt handler. */
 static void
 timer_interrupt (struct intr_frame *args UNUSED)
 {
-  // no sync necessary, interrupt handlers are atomic
+  /* Check sleeping threads */
   ticks++;
   struct list_elem *e = list_begin(&sleep_list);
   while (e != list_end(&sleep_list)) {
     struct sleep_entry *entry = list_entry(e, struct sleep_entry, elem);
     if (entry->wakeup_time <= ticks) {
       sema_up(&entry->sema);
-      e = list_remove(e); // assign next element to e
+      e = list_remove(e);
     } else {
       break;
     }
@@ -279,3 +288,5 @@ real_time_delay (int64_t num, int32_t denom)
   ASSERT (denom % 1000 == 0);
   busy_wait (loops_per_tick * num / 1000 * TIMER_FREQ / (denom / 1000)); 
 }
+
+
