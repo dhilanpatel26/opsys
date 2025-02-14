@@ -190,9 +190,9 @@ void mlfq_update_priority(void) {
 
     // promote or demote if necessary
     if (t->status == THREAD_READY && t->priority != prev_priority) {
-      struct list new_queue = mlfq_list[prev_priority];
+      struct list *new_queue = &mlfq_list[prev_priority];
       list_remove(&t->elem);
-      list_push_back(&new_queue, &t->elem);
+      list_push_back(new_queue, &t->elem);
     }
 
     // don't need to yield "running" thread here, about to be preempted
@@ -222,9 +222,18 @@ void update_load_avg(void) {
     ready_threads += list_size(&mlfq_list[i]);
   }
   // add currently running thread if not idle thread
-  if (thread_current() != idle_thread) {
+  // and the current thread is not sleeping
+
+  printf("threads in queues: %zu\n", ready_threads);
+
+  struct thread *cur = thread_current();
+  if (cur != idle_thread && cur->status == THREAD_RUNNING) {
     ready_threads++;
   }
+
+  printf("ready_threads: %zu, current_load: %d\n", 
+    ready_threads, 
+    thread_get_load_avg());
 
   load_avg = fp_div_int(fp_mul_int(load_avg, 59), 60)
     + fp_div_int(convert_to_fixedpoint((int)ready_threads), 60);
@@ -455,8 +464,8 @@ thread_set_nice (int nice)
   cur->nice = nice;
   thread_update_priority(cur);
   for (int i = PRI_MAX; i > cur->priority; i--) {
-    struct list queue = mlfq_list[i];
-    if (!list_empty(&queue)) {
+    struct list *queue = &mlfq_list[i];
+    if (!list_empty(queue)) {
       thread_yield();
       return;
     }
