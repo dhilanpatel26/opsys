@@ -80,6 +80,7 @@ void update_load_avg(void);
 void mlfq_update_priority(void);
 void update_recent_cpu(void);
 void thread_update_priority(struct thread *t);
+void thread_check_yield(void);
 
 bool thread_compare_priority (const struct list_elem *a,const struct list_elem *b,void *aux UNUSED)
 {
@@ -148,6 +149,8 @@ thread_start (void)
 void
 thread_tick (void) 
 {
+  ASSERT (intr_context ());
+
   struct thread *t = thread_current ();
 
   /* Update statistics. */
@@ -171,7 +174,8 @@ thread_tick (void)
     }
 
     if (timer_ticks () % 4 == 0) {
-      mlfq_update_priority();
+      mlfq_update_priority();      
+      // it appears that we are supposed to leave preemption to the time slice
     }
   }
 
@@ -181,6 +185,10 @@ thread_tick (void)
 }
 
 void mlfq_update_priority(void) {
+  ASSERT(intr_context());
+  ASSERT(thread_mlfqs);
+  // TODO: get rid of loop and use foreach in thread_tick
+
   // called during interrupt context, scheduler will decide next thread after this
   // interrupted thread has not yet been preempted
   for (struct list_elem *e = list_begin(&all_list); e != list_end(&all_list); e = list_next(e)) {
@@ -194,12 +202,10 @@ void mlfq_update_priority(void) {
 
     // promote or demote if necessary
     if (t->status == THREAD_READY && t->priority != prev_priority) {
-      struct list *new_queue = &mlfq_list[prev_priority];
+      struct list *new_queue = &mlfq_list[t->priority];
       list_remove(&t->elem);
       list_push_back(new_queue, &t->elem);
     }
-
-    // don't need to yield "running" thread here, about to be preempted
   }
 }
 
@@ -218,6 +224,7 @@ void update_recent_cpu() {
   fixedpoint_t double_load = fp_mul_int(load_avg, 2);
   fixedpoint_t coeff = fp_div(double_load, fp_add_int(double_load, 1));
 
+  // TODO: use foreach
   for (struct list_elem *e = list_begin(&all_list); e != list_end(&all_list); e = list_next(e)) {
     struct thread *t = list_entry(e, struct thread, allelem);
     if (t != idle_thread) {
@@ -348,7 +355,9 @@ thread_unblock (struct thread *t)
 
   old_level = intr_disable ();
   ASSERT (t->status == THREAD_BLOCKED);
-  if (thread_mlfqs) {
+
+  if (thread_mlfqs && t != idle_thread) {
+    thread_update_priority(t); // necessary? or leave to routine updates?
     ASSERT(t->priority >= PRI_MIN && t->priority <= PRI_MAX);
     list_push_back(&mlfq_list[t->priority], &t->elem);
   } else {
@@ -472,15 +481,22 @@ thread_get_priority (void)
 void
 thread_set_nice (int nice) 
 {
-  // ASSERT (thread_mlfqs);
+  ASSERT (thread_mlfqs);
+  ASSERT (!intr_context());
   struct thread *cur = thread_current();
   cur->nice = nice;
   thread_update_priority(cur);
+  thread_check_yield();
+}
+
+void thread_check_yield() {
+  ASSERT (thread_mlfqs);
+  ASSERT(!intr_context());
+  struct thread *cur = thread_current();
   for (int i = PRI_MAX; i > cur->priority; i--) {
     struct list *queue = &mlfq_list[i];
     if (!list_empty(queue)) {
       thread_yield();
-      return;
     }
   }
 }
