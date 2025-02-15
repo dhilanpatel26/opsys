@@ -161,11 +161,15 @@ thread_tick (void)
     kernel_ticks++;
 
   if (thread_mlfqs) {
-    t->recent_cpu = fp_add(t->recent_cpu, 1);
+    if (t != idle_thread) {
+      t->recent_cpu = fp_add_int(t->recent_cpu, 1);
+    }
+
     if (timer_ticks () % TIMER_FREQ == 0) {
       update_load_avg();
       update_recent_cpu();
     }
+
     if (timer_ticks () % 4 == 0) {
       mlfq_update_priority();
     }
@@ -209,10 +213,16 @@ void thread_update_priority(struct thread *t) {
 }
 
 void update_recent_cpu() {
+  ASSERT(thread_mlfqs);
+  ASSERT(intr_context());
+  fixedpoint_t double_load = fp_mul_int(load_avg, 2);
+  fixedpoint_t coeff = fp_div(double_load, fp_add_int(double_load, 1));
+
   for (struct list_elem *e = list_begin(&all_list); e != list_end(&all_list); e = list_next(e)) {
     struct thread *t = list_entry(e, struct thread, allelem);
-    fixedpoint_t coeff = fp_div(fp_mul_int(load_avg, 2), fp_add_int(fp_mul_int(load_avg, 2), 1));
-    t->recent_cpu = fp_add_int(fp_mul(coeff, t->recent_cpu), t->nice);
+    if (t != idle_thread) {
+      t->recent_cpu = fp_add_int(fp_mul(coeff, t->recent_cpu), t->nice);
+    }
   }
 }
 
@@ -224,19 +234,20 @@ void update_load_avg(void) {
   // add currently running thread if not idle thread
   // and the current thread is not sleeping
 
-  printf("threads in queues: %zu\n", ready_threads);
+  // printf("threads in queues: %zu\n", ready_threads);
 
   struct thread *cur = thread_current();
-  if (cur != idle_thread && cur->status == THREAD_RUNNING) {
+  if (cur != idle_thread && (cur->status == THREAD_RUNNING || cur->status == THREAD_READY)) {
     ready_threads++;
   }
 
-  printf("ready_threads: %zu, current_load: %d\n", 
-    ready_threads, 
-    thread_get_load_avg());
+  // printf("ready_threads: %zu, current_load: %d\n", 
+  //   ready_threads, 
+  //   thread_get_load_avg());
 
-  load_avg = fp_div_int(fp_mul_int(load_avg, 59), 60)
-    + fp_div_int(convert_to_fixedpoint((int)ready_threads), 60);
+  fixedpoint_t coeff_59_60 = fp_div_int(convert_to_fixedpoint(59), 60);
+  fixedpoint_t coeff_1_60 = fp_div_int(convert_to_fixedpoint(1), 60);
+  load_avg = fp_add(fp_mul(coeff_59_60, load_avg), fp_mul_int(coeff_1_60, (int) ready_threads));
 }
 
 /* Prints thread statistics. */
@@ -338,6 +349,7 @@ thread_unblock (struct thread *t)
   old_level = intr_disable ();
   ASSERT (t->status == THREAD_BLOCKED);
   if (thread_mlfqs) {
+    ASSERT(t->priority >= PRI_MIN && t->priority <= PRI_MAX);
     list_push_back(&mlfq_list[t->priority], &t->elem);
   } else {
     list_insert_ordered(&ready_list, &t->elem,thread_compare_priority, NULL);
@@ -413,6 +425,7 @@ thread_yield (void)
   old_level = intr_disable ();
   if (cur != idle_thread) {
     if (thread_mlfqs) {
+      ASSERT(cur->priority >= PRI_MIN && cur->priority <= PRI_MAX);
       list_push_back(&mlfq_list[cur->priority], &cur->elem);
     } else {
     list_insert_ordered(&ready_list, &cur->elem, thread_compare_priority, NULL);
@@ -579,16 +592,13 @@ init_thread (struct thread *t, const char *name, int priority)
   t->status = THREAD_BLOCKED;
   strlcpy (t->name, name, sizeof t->name);
   t->stack = (uint8_t *) t + PGSIZE;
-  t->nice = !strcmp(name, "main") ? 0 : thread_get_nice();
+
   if (thread_mlfqs) {
-    priority = PRI_MAX - (t->nice * 2);
-    if (priority < PRI_MIN) {
-      priority = PRI_MIN;
-    } else if (priority > PRI_MAX) {
-      priority = PRI_MAX;
-    }
+    t->nice = !strcmp(name, "main") ? 0 : thread_get_nice();
+    t->recent_cpu = !strcmp(name, "main") ? convert_to_fixedpoint(0) : thread_current()->recent_cpu;
+    thread_update_priority(t);
   }
-  t->recent_cpu = convert_to_fixedpoint(0);
+  
   t->priority = priority;
   t->magic = THREAD_MAGIC;
 
