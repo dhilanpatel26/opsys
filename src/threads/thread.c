@@ -210,6 +210,7 @@ void mlfq_update_priority(void) {
 }
 
 void thread_update_priority(struct thread *t) {
+  ASSERT(t != idle_thread);
   t->priority = PRI_MAX - convert_to_integer(fp_div_int(t->recent_cpu, 4)) - t->nice * 2;
   if (t->priority > PRI_MAX) {
     t->priority = PRI_MAX;
@@ -484,6 +485,7 @@ thread_set_nice (int nice)
   ASSERT (thread_mlfqs);
   ASSERT (!intr_context());
   struct thread *cur = thread_current();
+  ASSERT (cur != idle_thread);
   cur->nice = nice;
   thread_update_priority(cur);
   thread_check_yield();
@@ -537,6 +539,9 @@ idle (void *idle_started_ UNUSED)
 {
   struct semaphore *idle_started = idle_started_;
   idle_thread = thread_current ();
+  idle_thread->priority = PRI_MIN;
+  idle_thread->nice = 20;
+  idle_thread->recent_cpu = convert_to_fixedpoint(0);
   sema_up (idle_started);
 
   for (;;) 
@@ -544,6 +549,10 @@ idle (void *idle_started_ UNUSED)
       /* Let someone else run. */
       intr_disable ();
       thread_block ();
+
+      if (idle_thread != thread_current()) {
+        PANIC("Idle thread scheduled!");
+      }
 
       /* Re-enable interrupts and wait for the next one.
 
@@ -612,7 +621,9 @@ init_thread (struct thread *t, const char *name, int priority)
   if (thread_mlfqs) {
     t->nice = !strcmp(name, "main") ? 0 : thread_get_nice();
     t->recent_cpu = !strcmp(name, "main") ? convert_to_fixedpoint(0) : thread_current()->recent_cpu;
-    thread_update_priority(t);
+    if (t != idle_thread) {
+      thread_update_priority(t);
+    }
   }
   
   t->priority = priority;
