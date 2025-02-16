@@ -92,6 +92,10 @@ struct thread
     struct list_elem allelem;           /* List element for all threads list. */
     int nice;                           /* Nice value. */
     fixedpoint_t recent_cpu;
+    int base_priority;            /* The original priority of the thread. */
+    struct lock *waiting_lock;    /* The lock this thread is waiting for (if any). */
+    struct list donations;        /* List of threads that donated priority to this thread. */
+    struct list_elem donation_elem; 
 
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */
@@ -142,4 +146,7 @@ void thread_set_nice (int);
 int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
 int thread_get_priority (void);
+void donate_priority(struct thread *donor, struct thread *recipient);
+void refresh_priority(struct thread *t);
+void remove_lock_donations(struct thread *t, struct lock *lock);
 #endif /* threads/thread.h */

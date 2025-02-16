@@ -65,7 +65,7 @@ static struct list mlfq_list[PRI_MAX + 1]; // array of queues
 
 static fixedpoint_t load_avg;
 
-static bool thread_compare_priority (const struct list_elem *, const struct list_elem *, void *);
+bool thread_compare_priority (const struct list_elem *, const struct list_elem *, void *);
 static void kernel_thread (thread_func *, void *aux);
 static void idle (void *aux UNUSED);
 static struct thread *running_thread (void);
@@ -82,12 +82,11 @@ void update_recent_cpu(void);
 void thread_update_priority(struct thread *t);
 void thread_check_yield(void);
 
-bool thread_compare_priority (const struct list_elem *a,const struct list_elem *b,void *aux UNUSED)
-{
-  const struct thread *t_a = list_entry(a, struct thread, elem);
-  const struct thread *t_b = list_entry(b, struct thread, elem);
-  // Return true if t_a has strictly higher priority than t_b
-  return t_a->priority > t_b->priority;
+bool thread_compare_priority (const struct list_elem *a,
+                              const struct list_elem *b, void *aux UNUSED) {
+    const struct thread *t_a = list_entry(a, struct thread, elem);
+    const struct thread *t_b = list_entry(b, struct thread, elem);
+    return t_a->priority > t_b->priority;
 }
 
 /* Initializes the threading system by transforming the code
@@ -320,6 +319,12 @@ thread_create (const char *name, int priority,
   /* Add to run queue. */
   thread_unblock (t);
 
+  /* If the new thread has a higher priority than the current thread,
+    yield so that it runs immediately. */
+  if (!thread_mlfqs && thread_current()->priority < t->priority){
+    thread_yield();
+  }
+
   return tid;
 }
 
@@ -468,7 +473,20 @@ thread_foreach (thread_action_func *func, void *aux)
 void
 thread_set_priority (int new_priority) 
 {
-  thread_current ()->priority = new_priority;
+  struct thread *cur = thread_current();
+  int old_priority = cur->priority;
+  cur->priority = new_priority;
+
+  /* For non-MLFQS scheduling, if the current thread’s priority is lowered,
+     yield if there's a thread in the ready list with a higher priority. */
+  if (!thread_mlfqs && new_priority < old_priority) {
+    if (!list_empty(&ready_list)) {
+      struct thread *highest_ready = list_entry(list_front(&ready_list), struct thread, elem);
+      if (highest_ready->priority > new_priority) {
+        thread_yield();
+      }
+    }
+  }
 }
 
 /* Returns the current thread's priority. */
@@ -477,6 +495,7 @@ thread_get_priority (void)
 {
   return thread_current ()->priority;
 }
+
 
 /* Sets the current thread's nice value to NICE. */
 void
@@ -628,11 +647,53 @@ init_thread (struct thread *t, const char *name, int priority)
   
   t->priority = priority;
   t->magic = THREAD_MAGIC;
+  t->base_priority = priority;
+  t->waiting_lock = NULL;
+  list_init(&t->donations);
+
 
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);
   intr_set_level (old_level);
 }
+
+/* if donor’s priority is higher than recipient’s,
+   update recipient and, if it’s blocked waiting on a lock, donate recursively. */
+void donate_priority(struct thread *donor, struct thread *recipient) {
+  if (recipient->priority < donor->priority) {
+    recipient->priority = donor->priority;
+    list_push_back(&recipient->donations, &donor->donation_elem);
+    if (recipient->waiting_lock != NULL && recipient->waiting_lock->holder != NULL) {
+      donate_priority(donor, recipient->waiting_lock->holder);
+    }
+  }
+}
+
+/* reset to base, then check active donations. */
+void refresh_priority(struct thread *t) {
+  t->priority = t->base_priority;
+  for (struct list_elem *e = list_begin(&t->donations);
+       e != list_end(&t->donations); e = list_next(e)) {
+    struct thread *donor = list_entry(e, struct thread, donation_elem);
+    if (donor->priority > t->priority) {
+      t->priority = donor->priority;
+    }
+  }
+}
+
+/* Remove all donations associated with a given lock. */
+void remove_lock_donations(struct thread *t, struct lock *lock) {
+  struct list_elem *e = list_begin(&t->donations);
+  while (e != list_end(&t->donations)) {
+    struct thread *donor = list_entry(e, struct thread, donation_elem);
+    struct list_elem *next = list_next(e);
+    if (donor->waiting_lock == lock) {
+      list_remove(e);
+    }
+    e = next;
+  }
+}
+
 
 /* Allocates a SIZE-byte frame at the top of thread T's stack and
    returns a pointer to the frame's base. */
