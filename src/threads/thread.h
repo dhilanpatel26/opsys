@@ -107,6 +107,7 @@ struct thread
    Controlled by kernel command-line option "-o mlfqs". */
 extern bool thread_mlfqs;
 
+bool thread_compare_priority (const struct list_elem *, const struct list_elem *, void *);
 void thread_init (void);
 void thread_start (void);
 
@@ -137,5 +138,5 @@ int thread_get_nice (void);
 void thread_set_nice (int);
 int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
-
+int thread_get_priority (void);
 #endif /* threads/thread.h */
