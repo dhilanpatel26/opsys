@@ -65,7 +65,6 @@ static struct list mlfq_list[PRI_MAX + 1]; // array of queues
 
 static fixedpoint_t load_avg;
 
-bool thread_compare_priority (const struct list_elem *, const struct list_elem *, void *);
 static void kernel_thread (thread_func *, void *aux);
 static void idle (void *aux UNUSED);
 static struct thread *running_thread (void);
@@ -321,7 +320,7 @@ thread_create (const char *name, int priority,
 
   /* If the new thread has a higher priority than the current thread,
     yield so that it runs immediately. */
-  if (!thread_mlfqs && thread_current()->priority < t->priority){
+  if (thread_current()->priority < t->priority){
     thread_yield();
   }
 
@@ -473,13 +472,14 @@ thread_foreach (thread_action_func *func, void *aux)
 void
 thread_set_priority (int new_priority) 
 {
+  ASSERT (!thread_mlfqs);
   struct thread *cur = thread_current();
   int old_priority = cur->priority;
   cur->priority = new_priority;
 
   /* For non-MLFQS scheduling, if the current thread’s priority is lowered,
      yield if there's a thread in the ready list with a higher priority. */
-  if (!thread_mlfqs && new_priority < old_priority) {
+  if (new_priority < old_priority) {
     if (!list_empty(&ready_list)) {
       struct thread *highest_ready = list_entry(list_front(&ready_list), struct thread, elem);
       if (highest_ready->priority > new_priority) {
