@@ -318,11 +318,23 @@ cond_wait (struct condition *cond, struct lock *lock)
   ASSERT (lock_held_by_current_thread (lock));
   
   sema_init (&waiter.semaphore, 0);
-  // list_push_back (&cond->waiters, &waiter.elem);
-  list_insert_ordered(&cond->waiters, &waiter.elem, thread_compare_priority, NULL);
+  // add to semaphore waiters list, then cond waiters list for sorting purposes
+  list_insert_ordered(&waiter.semaphore.waiters, &thread_current ()->elem, thread_compare_priority, NULL);
+  list_insert_ordered (&cond->waiters, &waiter.elem, cond_sema_priority_compare, NULL);
   lock_release (lock);
+  list_remove(&thread_current()->elem); // remove from semaphore waiters list, down will re-add
   sema_down (&waiter.semaphore);
   lock_acquire (lock);
+}
+
+static bool cond_sema_priority_compare(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED) {
+  struct semaphore_elem *sa = list_entry(a, struct semaphore_elem, elem);
+  struct semaphore_elem *sb = list_entry(b, struct semaphore_elem, elem);
+
+  struct thread *ta = list_entry(list_begin(&sa->semaphore.waiters), struct thread, elem);
+  struct thread *tb = list_entry(list_begin(&sb->semaphore.waiters), struct thread, elem);
+
+  return ta->priority > tb->priority;
 }
 
 /* If any threads are waiting on COND (protected by LOCK), then
