@@ -211,9 +211,11 @@ lock_acquire (struct lock *lock)
   ASSERT (!intr_context ());
   ASSERT (!lock_held_by_current_thread (lock));
   struct thread *cur = thread_current ();
-  if (thread_mlfqs && lock->holder) {
+  // donations only apply to priority scheduler
+  if (!thread_mlfqs && lock->holder) {
     cur->waiting_lock = lock;
-    donate_priority(cur, lock->holder);
+    // TODO: fix priority donation (making condvar test fail)
+    // donate_priority(cur, lock->holder);
   }
   sema_down (&lock->semaphore);
   cur->waiting_lock = NULL;
@@ -250,7 +252,9 @@ lock_release (struct lock *lock)
 {
   ASSERT (lock != NULL);
   ASSERT (lock_held_by_current_thread (lock));
-  if (thread_mlfqs) {
+
+  // donations only apply to priority scheduler
+  if (!thread_mlfqs) {
     struct thread *cur = thread_current ();
     remove_lock_donations(cur, lock);
   }
