@@ -70,8 +70,8 @@ sema_down (struct semaphore *sema)
   while (sema->value == 0) 
     {
       // TODO: add support for dynamic resorting as priorities change, mlfq and prischeder
-      list_sort(&sema->waiters, thread_compare_priority, NULL);
-      list_insert_ordered(&sema->waiters, &thread_current ()->elem,thread_compare_priority, NULL);
+      // list_sort(&sema->waiters, sema_compare_priority, NULL);
+      list_insert_ordered(&sema->waiters, &thread_current ()->sema_elem, sema_compare_priority, NULL);
       thread_block ();
     }
   sema->value--;
@@ -117,14 +117,13 @@ sema_up (struct semaphore *sema)
 
   // doesn't need to be part of crit section
   // this is only used doe correctness checking
-  sema->value++;
-
   // critical section: must synchronize sema->waiters list
   old_level = intr_disable ();
+  sema->value++;
   if (!list_empty (&sema->waiters)) {
     // Re-sort the waiters list in case any waiting thread's priority changed.
-    list_sort(&sema->waiters, thread_compare_priority, NULL);
-    struct thread *t = list_entry (list_pop_front (&sema->waiters), struct thread, elem);
+    list_sort(&sema->waiters, sema_compare_priority, NULL);
+    struct thread *t = list_entry (list_pop_front (&sema->waiters), struct thread, sema_elem);
     thread_unblock (t);
 
     if (!intr_context()) {
@@ -258,9 +257,22 @@ lock_release (struct lock *lock)
 
   // donations only apply to priority scheduler
   if (!thread_mlfqs) {
+    enum intr_level old_level = intr_disable();
     struct thread *cur = thread_current ();
-    remove_lock_donations(cur, lock);
+    for (
+      struct list_elem *e = list_begin(&cur->donations);
+      e != list_end(&cur->donations);
+      e = list_next(e)
+    ) {
+      struct thread *donor = list_entry(e, struct thread, donation_elem);
+      // may have duplicate removals, esp in condvar
+      // waiters not updated?
+      if (donor->waiting_lock == lock) {
+        list_remove(e);
+      }
+    }
     refresh_priority(cur);
+    intr_set_level(old_level);
   }
   lock->holder = NULL;
   sema_up (&lock->semaphore);
@@ -327,10 +339,10 @@ cond_wait (struct condition *cond, struct lock *lock)
   
   sema_init (&waiter.semaphore, 0);
   // add to semaphore waiters list, then cond waiters list for sorting purposes
-  list_insert_ordered(&waiter.semaphore.waiters, &thread_current ()->elem, thread_compare_priority, NULL);
+  list_insert_ordered(&waiter.semaphore.waiters, &thread_current ()->sema_elem, sema_compare_priority, NULL);
   list_insert_ordered (&cond->waiters, &waiter.elem, cond_sema_priority_compare, NULL);
   lock_release (lock);
-  list_remove(&thread_current()->elem); // remove from semaphore waiters list, down will re-add
+  list_remove(&thread_current()->sema_elem); // remove from semaphore waiters list, down will re-add
   sema_down (&waiter.semaphore);
   lock_acquire (lock);
 }
@@ -339,8 +351,8 @@ static bool cond_sema_priority_compare(const struct list_elem *a, const struct l
   struct semaphore_elem *sa = list_entry(a, struct semaphore_elem, elem);
   struct semaphore_elem *sb = list_entry(b, struct semaphore_elem, elem);
 
-  struct thread *ta = list_entry(list_begin(&sa->semaphore.waiters), struct thread, elem);
-  struct thread *tb = list_entry(list_begin(&sb->semaphore.waiters), struct thread, elem);
+  struct thread *ta = list_entry(list_begin(&sa->semaphore.waiters), struct thread, sema_elem);
+  struct thread *tb = list_entry(list_begin(&sb->semaphore.waiters), struct thread, sema_elem);
 
   return ta->priority > tb->priority;
 }

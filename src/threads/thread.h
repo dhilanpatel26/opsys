@@ -97,6 +97,7 @@ struct thread
     struct list donations;        /* List of threads that donated priority to this thread. */
     struct list_elem donation_elem; 
     struct semaphore donation_sem;
+    struct list_elem sema_elem;
 
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */
@@ -116,6 +117,8 @@ struct thread
 extern bool thread_mlfqs;
 
 bool thread_compare_priority (const struct list_elem *, const struct list_elem *, void *);
+bool donation_compare_priority (const struct list_elem *, const struct list_elem *, void *);
+bool sema_compare_priority (const struct list_elem *, const struct list_elem *, void *);
 void thread_init (void);
 void thread_start (void);
 
