@@ -70,6 +70,7 @@ sema_down (struct semaphore *sema)
   while (sema->value == 0) 
     {
       // TODO: add support for dynamic resorting as priorities change, mlfq and prischeder
+      list_sort(&sema->waiters, thread_compare_priority, NULL);
       list_insert_ordered(&sema->waiters, &thread_current ()->elem,thread_compare_priority, NULL);
       thread_block ();
     }
@@ -121,6 +122,8 @@ sema_up (struct semaphore *sema)
   // critical section: must synchronize sema->waiters list
   old_level = intr_disable ();
   if (!list_empty (&sema->waiters)) {
+    // Re-sort the waiters list in case any waiting thread's priority changed.
+    list_sort(&sema->waiters, thread_compare_priority, NULL);
     struct thread *t = list_entry (list_pop_front (&sema->waiters), struct thread, elem);
     thread_unblock (t);
 
@@ -215,7 +218,7 @@ lock_acquire (struct lock *lock)
   if (!thread_mlfqs && lock->holder) {
     cur->waiting_lock = lock;
     // TODO: fix priority donation (making condvar test fail)
-    // donate_priority(cur, lock->holder);
+    donate_priority(cur, lock->holder);
   }
   sema_down (&lock->semaphore);
   cur->waiting_lock = NULL;
@@ -257,6 +260,7 @@ lock_release (struct lock *lock)
   if (!thread_mlfqs) {
     struct thread *cur = thread_current ();
     remove_lock_donations(cur, lock);
+    refresh_priority(cur);
   }
   lock->holder = NULL;
   sema_up (&lock->semaphore);

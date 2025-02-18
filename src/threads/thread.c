@@ -142,6 +142,7 @@ thread_start (void)
   sema_down (&idle_started);
 }
 
+
 /* Called by the timer interrupt handler at each timer tick.
    Thus, this function runs in an external interrupt context. */
 void
@@ -476,6 +477,10 @@ thread_set_priority (int new_priority)
   struct thread *cur = thread_current();
   int old_priority = cur->priority;
   cur->priority = new_priority;
+  // If the thread is in the ready list, re-sort the list.
+  if (cur->status == THREAD_READY) {
+    list_sort(&ready_list, thread_compare_priority, NULL);
+  }
 
   /* For non-MLFQS scheduling, if the current thread’s priority is lowered,
      yield if there's a thread in the ready list with a higher priority. */
@@ -650,7 +655,7 @@ init_thread (struct thread *t, const char *name, int priority)
   t->base_priority = priority;
   t->waiting_lock = NULL;
   list_init(&t->donations);
-
+  sema_init(&t->donation_sem, 1);
 
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);
@@ -660,12 +665,19 @@ init_thread (struct thread *t, const char *name, int priority)
 /* if donor’s priority is higher than recipient’s,
    update recipient and, if it’s blocked waiting on a lock, donate recursively. */
 void donate_priority(struct thread *donor, struct thread *recipient) {
+  sema_down(&recipient->donation_sem); 
   if (recipient->priority < donor->priority) {
     recipient->priority = donor->priority;
-    list_push_back(&recipient->donations, &donor->donation_elem);
+    //I think the donation list should also be priority-sorted in case multiple donors?
+    list_insert_ordered(&recipient->donations, &donor->donation_elem,thread_compare_priority, NULL);
+    //list_push_back(&recipient->donations, &donor->donation_elem);
+    sema_up(&recipient->donation_sem);
     if (recipient->waiting_lock != NULL && recipient->waiting_lock->holder != NULL) {
       donate_priority(donor, recipient->waiting_lock->holder);
     }
+  }
+  else{
+    sema_up(&recipient->donation_sem);
   }
 }
 
