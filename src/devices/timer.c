@@ -24,10 +24,10 @@ static struct lock sleep_list_lock;
 
 /* Sleep thread structure */
 struct sleep_entry {
-  struct thread *thread;        /* Thread that is sleeping */
-  int64_t wakeup_time;          /* Time to wake up */
-  struct semaphore sema;        /* Semaphore to wait on */
-  struct list_elem elem;        /* List element */
+  struct thread *thread;      
+  int64_t wakeup_time;   
+  struct semaphore sema;  
+  struct list_elem elem;  
 };
 
 /* Number of timer ticks since OS booted. */
@@ -35,7 +35,6 @@ static int64_t ticks;
 
 /* Returns true if thread a should wake up before thread b. */
 bool timer_cmp(const struct list_elem *a, const struct list_elem *b, void *aux) {
-  ASSERT (aux == NULL);
   struct sleep_entry *entry_a = list_entry(a, struct sleep_entry, elem);
   struct sleep_entry *entry_b = list_entry(b, struct sleep_entry, elem);
   return entry_a->wakeup_time < entry_b->wakeup_time;
@@ -122,7 +121,7 @@ timer_sleep (int64_t ticks)
   entry.wakeup_time = start + ticks;
   sema_init(&entry.sema, 0);
 
-  lock_acquire(&sleep_list_lock); // interrupt-safe
+  lock_acquire(&sleep_list_lock);
   list_insert_ordered(&sleep_list, &entry.elem, timer_cmp, NULL);
   lock_release(&sleep_list_lock);
 
