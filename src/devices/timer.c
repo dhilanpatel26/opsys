@@ -34,7 +34,7 @@ struct sleep_entry {
 static int64_t ticks;
 
 /* Returns true if thread a should wake up before thread b. */
-bool timer_cmp(const struct list_elem *a, const struct list_elem *b, void *aux) {
+bool timer_cmp(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED) {
   struct sleep_entry *entry_a = list_entry(a, struct sleep_entry, elem);
   struct sleep_entry *entry_b = list_entry(b, struct sleep_entry, elem);
   return entry_a->wakeup_time < entry_b->wakeup_time;
