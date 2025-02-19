@@ -69,8 +69,6 @@ sema_down (struct semaphore *sema)
   old_level = intr_disable ();
   while (sema->value == 0) 
     {
-      // TODO: add support for dynamic resorting as priorities change, mlfq and prischeder
-      // list_sort(&sema->waiters, sema_compare_priority, NULL);
       list_insert_ordered(&sema->waiters, &thread_current ()->sema_elem, sema_compare_priority, NULL);
       thread_block ();
     }
@@ -115,9 +113,6 @@ sema_up (struct semaphore *sema)
 
   ASSERT (sema != NULL);
 
-  // doesn't need to be part of crit section
-  // this is only used doe correctness checking
-  // critical section: must synchronize sema->waiters list
   old_level = intr_disable ();
   sema->value++;
   if (!list_empty (&sema->waiters)) {
@@ -306,6 +301,8 @@ cond_init (struct condition *cond)
 
   list_init (&cond->waiters);
 }
+
+static bool cond_sema_priority_compare(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED);
 
 /* Atomically releases LOCK and waits for COND to be signaled by
    some other piece of code.  After COND is signaled, LOCK is

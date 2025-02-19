@@ -188,7 +188,6 @@ thread_tick (void)
 
     if (timer_ticks () % 4 == 0) {
       mlfq_update_priority();      
-      // it appears that we are supposed to leave preemption to the time slice
     }
   }
 
@@ -200,9 +199,7 @@ thread_tick (void)
 void mlfq_update_priority(void) {
   ASSERT(intr_context());
   ASSERT(thread_mlfqs);
-  // TODO: get rid of loop and use foreach in thread_tick
 
-  // called during interrupt context, scheduler will decide next thread after this
   // interrupted thread has not yet been preempted
   for (struct list_elem *e = list_begin(&all_list); e != list_end(&all_list); e = list_next(e)) {
     struct thread *t = list_entry(e, struct thread, allelem);
@@ -238,7 +235,6 @@ void update_recent_cpu() {
   fixedpoint_t double_load = fp_mul_int(load_avg, 2);
   fixedpoint_t coeff = fp_div(double_load, fp_add_int(double_load, 1));
 
-  // TODO: use foreach
   for (struct list_elem *e = list_begin(&all_list); e != list_end(&all_list); e = list_next(e)) {
     struct thread *t = list_entry(e, struct thread, allelem);
     if (t != idle_thread) {
@@ -248,23 +244,17 @@ void update_recent_cpu() {
 }
 
 void update_load_avg(void) {
+  ASSERT(thread_mlfqs);
+
   size_t ready_threads = 0;
   for (int i = PRI_MIN; i < PRI_MAX + 1; i++) {
     ready_threads += list_size(&mlfq_list[i]);
   }
-  // add currently running thread if not idle thread
-  // and the current thread is not sleeping
-
-  // printf("threads in queues: %zu\n", ready_threads);
 
   struct thread *cur = thread_current();
   if (cur != idle_thread && (cur->status == THREAD_RUNNING || cur->status == THREAD_READY)) {
     ready_threads++;
   }
-
-  // printf("ready_threads: %zu, current_load: %d\n", 
-  //   ready_threads, 
-  //   thread_get_load_avg());
 
   fixedpoint_t coeff_59_60 = fp_div_int(convert_to_fixedpoint(59), 60);
   fixedpoint_t coeff_1_60 = fp_div_int(convert_to_fixedpoint(1), 60);
@@ -487,7 +477,6 @@ thread_foreach (thread_action_func *func, void *aux)
 void
 thread_set_priority (int new_priority) 
 {
-  // printf("SETTING PRIORITY\n");
   ASSERT (!thread_mlfqs);
   struct thread *cur = thread_current();
   int old_priority = cur->priority;
@@ -497,22 +486,13 @@ thread_set_priority (int new_priority)
     cur->priority = new_priority; // lightweight apparent priority refresh
   }
 
-  // If the thread is in the ready list, re-sort the list.
   if (cur->status == THREAD_READY) {
     list_remove(&cur->elem);
     list_insert_ordered(&ready_list, &cur->elem, thread_compare_priority, NULL);
   }
 
-  /* For non-MLFQS scheduling, if the current thread’s priority is lowered,
-     yield if there's a thread in the ready list with a higher priority. */
   if (new_priority < old_priority) {
     thread_yield();
-    // if (!list_empty(&ready_list)) {
-    //   struct thread *highest_ready = list_entry(list_front(&ready_list), struct thread, elem);
-    //   if (highest_ready->priority > new_priority) {
-    //     thread_yield();
-    //   }
-    // }
   }
 }
 
@@ -684,27 +664,6 @@ init_thread (struct thread *t, const char *name, int priority)
   intr_set_level (old_level);
 }
 
-/* if donor’s priority is higher than recipient’s,
-   update recipient and, if it’s blocked waiting on a lock, donate recursively. */
-// void donate_priority(struct thread *donor, struct thread *recipient) {
-//   // printf("PRIORITY DONATION\n");
-//   enum intr_level old_level = intr_disable();
-//   sema_down(&recipient->donation_sem); 
-//   if (recipient->priority < donor->priority) {
-//     recipient->priority = donor->priority;
-//     //I think the donation list should also be priority-sorted in case multiple donors?
-//     list_insert_ordered(&recipient->donations, &donor->donation_elem, donation_compare_priority, NULL);
-//     //list_push_back(&recipient->donations, &donor->donation_elem);
-//     sema_up(&recipient->donation_sem);
-//     if (recipient->waiting_lock != NULL && recipient->waiting_lock->holder != NULL) {
-//       donate_priority(donor, recipient->waiting_lock->holder);
-//     }
-//   }
-//   else{
-//     sema_up(&recipient->donation_sem);
-//   }
-//   intr_set_level(old_level);
-// }
 
 void donate_priority(struct thread *donor, struct thread *recipient) {
   enum intr_level old_level = intr_disable();
@@ -729,9 +688,7 @@ void donate_priority(struct thread *donor, struct thread *recipient) {
     
     sema_up(&current->donation_sem);
     
-    /* Commenting out nesting for now */
-    // current = NULL;
-    current = next;
+    current = next; // handling nested donations
   }
   
   intr_set_level(old_level);
@@ -739,7 +696,6 @@ void donate_priority(struct thread *donor, struct thread *recipient) {
 
 /* reset to base, then check active donations. */
 void refresh_priority(struct thread *t) {
-  // printf("REFRESHING PRIORITY\n");
   enum intr_level old_intr = intr_disable();
   sema_down(&t->donation_sem);
   t->priority = t->base_priority;
@@ -753,20 +709,6 @@ void refresh_priority(struct thread *t) {
   sema_up(&t->donation_sem);
   intr_set_level(old_intr);
 }
-
-// /* Remove all donations associated with a given lock. */
-// void remove_lock_donations(struct thread *t, struct lock *lock) {
-//   struct list_elem *e = list_begin(&t->donations);
-//   while (e != list_end(&t->donations)) {
-//     struct thread *donor = list_entry(e, struct thread, donation_elem);
-//     struct list_elem *next = list_next(e);
-//     if (donor->waiting_lock == lock) {
-//       list_remove(e);
-//     }
-//     e = next;
-//   }
-// }
-
 
 /* Allocates a SIZE-byte frame at the top of thread T's stack and
    returns a pointer to the frame's base. */
