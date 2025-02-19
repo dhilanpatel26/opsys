@@ -30,26 +30,57 @@ FirstName LastName <email@domain.example>
 >> `struct' member, global or static variable, `typedef', or
 >> enumeration.  Identify the purpose of each in 25 words or less.
 
+struct sleep_entry {
+  struct thread *thread;      
+  int64_t wakeup_time;   
+  struct semaphore sema;  
+  struct list_elem elem;  
+};
+static struct list sleep_list;
+static struct lock sleep_list_lock;
+
+******
+The purpose of the sleep_entry struct is to store information about a thread.
+The sleep_list data structure is a list containing sleep_entry structs that stores information about all the threads that are sleeping.
+The sleep_list_lock is a lock used to protect the sleep_list data structure while it is being modified.
+******
+
 ---- ALGORITHMS ----
 
 >> A2: Briefly describe what happens in a call to timer_sleep(),
 >> including the effects of the timer interrupt handler.
 
+When timer_sleep() is called, the current thread is suspended (or sleeps) for a given number of ticks. 
+The timer interrupt handler wakes up the thread when the timer expires.
+All of this is accomplished by adding the current thread to the sleep_list and acquiring the sleep_list_lock.
+
 >> A3: What steps are taken to minimize the amount of time spent in
 >> the timer interrupt handler?
+
+The timer interrupt handler is minimized by only waking up the thread when the timer expires. 
+Additionally, the list is ordered by wake_up time, so the thread with the earliest wake_up time gets checked on first.
 
 ---- SYNCHRONIZATION ----
 
 >> A4: How are race conditions avoided when multiple threads call
 >> timer_sleep() simultaneously?
 
+Race conditions get avoided by acquiring the sleep_list_lock when modifying the sleep_list.
+
 >> A5: How are race conditions avoided when a timer interrupt occurs
 >> during a call to timer_sleep()?
+
+Race conditions get avoided because of the sleep_list_lock, as well as the requirement
+that the timer interrupt handler only wakes up the thread when the timer expires.
 
 ---- RATIONALE ----
 
 >> A6: Why did you choose this design?  In what ways is it superior to
 >> another design you considered?
+
+This design was chosen because it is straightforward and employs 
+simple data structures and synchronization mechanisms already available in Pintos. 
+Anything more involved than this solution likely would have introduced unnecessary overhead and complexity.
 
 			 PRIORITY SCHEDULING
 			 ===================
