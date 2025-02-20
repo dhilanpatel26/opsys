@@ -58,7 +58,8 @@ All of this is accomplished by adding the current thread to the sleep_list and a
 >> the timer interrupt handler?
 
 The timer interrupt handler is minimized by only waking up the thread when the timer expires. 
-Additionally, the list is ordered by wake_up time, so the thread with the earliest wake_up time gets checked on first.
+The list is ordered by wake_up time, so the thread with the earliest wake_up time gets checked on first,
+allowing the other threads to continue sleeping.
 
 ---- SYNCHRONIZATION ----
 
@@ -66,12 +67,14 @@ Additionally, the list is ordered by wake_up time, so the thread with the earlie
 >> timer_sleep() simultaneously?
 
 Race conditions get avoided by acquiring the sleep_list_lock when modifying the sleep_list.
+This ensures that only one thread can modify the list at a time, preventing race conditions.
 
 >> A5: How are race conditions avoided when a timer interrupt occurs
 >> during a call to timer_sleep()?
 
-Race conditions get avoided because of the sleep_list_lock, as well as the requirement
-that the timer interrupt handler only wakes up the thread when the timer expires.
+Race conditions get avoided by turning off interrupts, acquiring the sleep_list_lock, and then turning interrupts back on.
+This makes sure that the timer interrupt handler won't  modify the list of sleeping threads while timer_sleep() is acquiring the lock.
+
 
 ---- RATIONALE ----
 
@@ -81,6 +84,8 @@ that the timer interrupt handler only wakes up the thread when the timer expires
 This design was chosen because it is straightforward and employs 
 simple data structures and synchronization mechanisms already available in Pintos. 
 Anything more involved than this solution likely would have introduced unnecessary overhead and complexity.
+Additionally, the use of an ordered list to store the sleeping threads ensures that the thread with the earliest 
+wake_up time gets checked on first, speeding up the overall process. 
 
 			 PRIORITY SCHEDULING
 			 ===================
