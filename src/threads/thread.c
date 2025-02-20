@@ -367,7 +367,7 @@ thread_unblock (struct thread *t)
   ASSERT (t->status == THREAD_BLOCKED);
 
   if (thread_mlfqs && t != idle_thread) {
-    thread_update_priority(t); // necessary? or leave to routine updates?
+    thread_update_priority(t); // immediately update priority
     ASSERT(t->priority >= PRI_MIN && t->priority <= PRI_MAX);
     list_push_back(&mlfq_list[t->priority], &t->elem);
   } else {
@@ -533,7 +533,7 @@ void thread_check_yield() {
 int
 thread_get_nice (void) 
 {
-  // ASSERT (thread_mlfqs);
+  ASSERT (thread_mlfqs);
   return thread_current ()->nice;
 }
 

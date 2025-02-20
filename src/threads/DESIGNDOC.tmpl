@@ -138,26 +138,54 @@ wake_up time gets checked on first, speeding up the overall process.
 >> scheduling decision and the priority and recent_cpu values for each
 >> thread after each given number of timer ticks:
 
+According to Pintos documentation, each thread's priority gets updated every 
+fourth tick. recent_cpu is incremented by 1 for the running thread on each 
+timer tick, and get's updated for every thread every 100 ticks (out of range 
+for this question). Similarly, load_avg gets updated every 100 ticks and will 
+not change over the course of these 36 ticks. Tiebreakers are handled by queue 
+round-robin (FIFO).
+
 timer  recent_cpu    priority   thread
 ticks   A   B   C   A   B   C   to run
 -----  --  --  --  --  --  --   ------
- 0
- 4
- 8
-12
-16
-20
-24
-28
-32
-36
+ 0      0   0   0  63  61  59     A
+ 4      4   0   0  62  61  59     A
+ 8      8   0   0  61  61  59     B
+12      8   4   0  61  60  59     A
+16     12   4   0  60  60  59     B
+20     12   8   0  60  59  59     A
+24     16   8   0  59  59  59     C
+28     16   8   4  59  59  58     B
+32     16   12  4  59  58  58     A
+36     20   12  4  58  58  58     C
 
 >> C3: Did any ambiguities in the scheduler specification make values
 >> in the table uncertain?  If so, what rule did you use to resolve
 >> them?  Does this match the behavior of your scheduler?
 
+Ambiguity 1: Whether a thread's priority should be updated immediately 
+after being unblocked.
+Rule 1: Yes, update the thread's priority after being unblocked. A call 
+to thread_update_priority is made on line 370 in thread.c.
+
+Ambiguity 2: The order in which updates to recent_cpu should be made on 
+second intervals: increment by 1 for the running thread, then recalculate 
+recent_cpu for all threads, or vice versa.
+Rule 2: First increment the current thread's recent_cpu, then recalculate 
+recent_cpu for all threads. Matches control flow in thread_tick in thread.c.
+
 >> C4: How is the way you divided the cost of scheduling between code
 >> inside and outside interrupt context likely to affect performance?
+We kept the computations inside the intgerrupt handler to a minimum, with 
+only a simple increment taking place each tick, and the more expensive 
+updates to load average and recent cpu being done every 100 ticks. MLFQ 
+priority updates are also done inside the interrupt context every fourth 
+tick, but this is relatively lightweight and unavoidable. The more expensive 
+operations like priority comparison and ready queue management are perfomed 
+during normal execution, offloading some of the overhead associated with an 
+interrupt/context switch. Dividing the cost of scheduling in this way keeps 
+interrupt handler performance fast and reliable, and minimizes the time that 
+the program spends with interrupts disabled.
 
 ---- RATIONALE ----
 
@@ -165,6 +193,17 @@ ticks   A   B   C   A   B   C   to run
 >> disadvantages in your design choices.  If you were to have extra
 >> time to work on this part of the project, how might you choose to
 >> refine or improve your design?
+We took a functional programming approach to implement the MLFQ scheduler, 
+and prioritized readable code building off of existing Pintos services. This 
+led to the advantage of a theoretically clean separation of logic and isolation 
+of the recent cpu, load average, and priority calculations. Another advantage is 
+that transitions in the state space of this program are well-defined and easy to 
+understand. However, a disadvantage is that we have some code duplication and nested 
+functions leading to a deep call stack and more overhead in transitioning between 
+adjacent frames. If we had more time on this part of the project, we would like to 
+generalize our functions to minimize code duplication, especially in the custom 
+comparators for each list. Additionally, we would like to add more assertion guards 
+at the beginning of each function to further detail the expected state during runtime.
 
 >> C6: The assignment explains arithmetic for fixed-point math in
 >> detail, but it leaves it open to you to implement it.  Why did you
@@ -172,6 +211,11 @@ ticks   A   B   C   A   B   C   to run
 >> abstraction layer for fixed-point math, that is, an abstract data
 >> type and/or a set of functions or macros to manipulate fixed-point
 >> numbers, why did you do so?  If not, why not?
+We chose to create an abstract data type with a set of functions to clearly 
+show which variables hold a fixed-point value, and which hold a normal integer. 
+In addition, since C does not support operator overloading, the set of functions 
+to manipulate fixed-point numbers was the next-best approximation of a native 
+floating-point data type.
 
 			   SURVEY QUESTIONS
 			   ================
