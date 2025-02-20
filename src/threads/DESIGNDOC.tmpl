@@ -110,6 +110,7 @@ Waiting_lock is the lock this thread is waiting for (if any).
 Donation_elem is for an element to be put on lower-priority thread's waiting list, so that we can track all the donors.
 Donation_sem is semaphore used for synchronization when adjusting or restoring donation-related priorities.
 Sema_elem allows the thread to be placed in semaphore wait lists in correct priority order.
+
 >> B2: Explain the data structure used to track priority donation.
 >> Use ASCII art to diagram a nested donation.  (Alternately, submit a
 >> .png file.)
@@ -138,15 +139,16 @@ Sema_elem allows the thread to be placed in semaphore wait lists in correct prio
 * After L2 is released by thread C, thread is able to acquire L2, while thread c is reverted to its original priority (10).
 * Thread A continues at the donated priority (50) while it holds Lock L2. Once it finishes its work with Lock L2, it releases it. If there are no more donors waiting on A’s locks, A’s priority reverts to 20.
 * Eventually, A will release Lock L1, allowing B to acquire Lock L1. At this point, B no longer needs to donate its priority to A or C, and B itself continues at its original (or possibly updated) priority.
+
 ---- ALGORITHMS ----
 
 >> B3: How do you ensure that the highest priority thread waiting for
 >> a lock, semaphore, or condition variable wakes up first?
 Since all waiting threads are stored in an ordered list (or priority queue) that is sorted by each thread’s current priority,
 when the lock (or semaphore, or condition) becomes available, the scheduler always removes and unblocks the front of this sorted list, which holds the thread of highest priority.
+
 >> B4: Describe the sequence of events when a call to lock_acquire()
 >> causes a priority donation.  How is nested donation handled?
-
 When lock_acquire() is called and the lock is held by a lower-priority thread, here’s what happens:
 
 Disable interrupts - Temporarily turn off interrupts to prevent context switches during donation.
@@ -163,6 +165,7 @@ Remove relevant donor- In the releasing thread’s donations list, remove any do
 Refresh releaser’s priority- Revert the lock holder’s priority to its base_priority or the highest remaining donor’s priority (if it holds other locks still blocking threads).
 Wake the next thread- In terms of what happen to this just-released-lock, we call sema_up to unblock the highest-priority thread waiting for the lock (it is removed from the semaphore’s sorted wait list).
 Restore interrupts- Re-enable interrupts and allow the scheduler to preempt if the newly unblocked thread has a higher priority.
+
 ---- SYNCHRONIZATION ----
 
 >> B6: Describe a potential race in thread_set_priority() and explain
@@ -172,6 +175,7 @@ If a thread calls thread_set_priority() while another thread (or the scheduler) 
 My implementation avoids it by disabling interrupts around scheduling operations (although thread_set_priority() itself doesn’t explicitly disable interrupts, other parts of the scheduling system (e.g., thread_yield(), thread_unblock()) do.)
 Additionally, When donation updates a thread’s priority, it acquires donation_sem to protect concurrent modifications. Thus, donation and explicit thread_set_priority() calls don’t interfere with each other at the same time.
 Using a lock might be risky because it would still enable context switch, and if the scheduler preempts while holding—or waiting for—the same lock, the system may deadlock.
+
 ---- RATIONALE ----
 
 >> B7: Why did you choose this design?  In what ways is it superior to
@@ -203,6 +207,7 @@ load_avg tracks the average number of ready threads over time for load balancing
 nice indicates how “nice” a thread is (how willing it can be to yield CPU time) for MLFQS priority calculations.
 recent_cpu stores a thread’s recent CPU usage in fixed-point format, used to compute dynamic priority under MLFQS.
 fixedpoint_t is a new data_type that defines a 32-bit fixed-point type for fractional arithmetic needed by MLFQS load and CPU calculations.
+
 ---- ALGORITHMS ----
 
 >> C2: Suppose threads A, B, and C have nice values 0, 1, and 2.  Each
