@@ -9,8 +9,10 @@
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 #include "userprog/pagedir.h"
+#include "userprog/process.h"
 
 static void syscall_handler (struct intr_frame *);
+static void exit_handler (int status);
 
 void
 syscall_init (void) 
@@ -42,7 +44,8 @@ syscall_handler (struct intr_frame *f UNUSED)
   switch (syscall_number) {
     case SYS_EXIT:
       int status = *(addr + 1);
-      break;
+      exit_handler(status);
+      NOT_REACHED();
     default:
       NOT_REACHED();
   }
@@ -50,4 +53,20 @@ syscall_handler (struct intr_frame *f UNUSED)
 
 
   thread_exit ();
+}
+
+static void
+exit_handler (int status) {
+  struct thread *cur = thread_current();
+  struct process_descriptor *pd = cur->pd;
+
+  // critical section
+  cur->pd->exit_status = status;
+  cur->pd->exited = true;
+  // end critical section
+
+  sema_up(&pd->wait_sema);
+  
+  // process cleanup handled by implicit process_exit
+  thread_exit();
 }

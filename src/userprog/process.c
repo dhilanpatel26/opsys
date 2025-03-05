@@ -1,3 +1,7 @@
+#ifndef USERPROG
+#define USERPROG
+#endif
+
 #include "userprog/process.h"
 #include <debug.h>
 #include <inttypes.h>
@@ -114,6 +118,8 @@ process_exit (void)
       pagedir_activate (NULL);
       pagedir_destroy (pd);
     }
+
+  // TODO: Close all open files
 }
 
 /* Sets up the CPU for running user code in the current
