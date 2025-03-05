@@ -58,14 +58,14 @@ syscall_handler (struct intr_frame *f UNUSED)
 static void
 exit_handler (int status) {
   struct thread *cur = thread_current();
-  struct process_descriptor *pd = cur->pd;
+  struct process_descriptor *procdesc = cur->procdesc;
 
   // critical section
-  cur->pd->exit_status = status;
-  cur->pd->exited = true;
+  cur->procdesc->exit_status = status;
+  cur->procdesc->exited = true;
   // end critical section
 
-  sema_up(&pd->wait_sema);
+  sema_up(&procdesc->wait_sema);
   
   // process cleanup handled by implicit process_exit
   thread_exit();

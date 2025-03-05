@@ -99,7 +99,7 @@ struct thread
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */
-    struct process_descriptor *pd;      /* Process descriptor. */
+    struct process_descriptor *procdesc;      /* Process descriptor. */
 #endif
 
     /* Owned by thread.c. */
