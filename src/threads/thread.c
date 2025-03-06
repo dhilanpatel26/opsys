@@ -98,6 +98,19 @@ thread_init (void)
   init_thread (initial_thread, "main", PRI_DEFAULT);
   initial_thread->status = THREAD_RUNNING;
   initial_thread->tid = allocate_tid ();
+
+  #ifdef USERPROG
+    struct process_descriptor *pd = malloc(sizeof(struct process_descriptor));
+    if (pd != NULL) {
+      pd->tid = initial_thread->tid;
+      pd->exit_status = -1;
+      pd->exited = false;
+      sema_init(&pd->wait_sema, 0);
+      pd->waited_on = false;
+      list_init(&pd->children);
+      initial_thread->procdesc = pd;
+    }
+  #endif
 }
 
 /* Starts preemptive thread scheduling by enabling interrupts.
