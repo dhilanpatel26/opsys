@@ -25,6 +25,13 @@
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
 
+struct process_info {
+  char *file_name;
+  struct process_descriptor *procdesc;
+  struct semaphore load_sema;
+  bool load_success;
+};
+
 /* Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
    before process_execute() returns.  Returns the new process's
@@ -32,6 +39,10 @@ static bool load (const char *cmdline, void (**eip) (void), void **esp);
 tid_t
 process_execute (const char *file_name) 
 {
+  // dynamically allocate aux data
+  struct process_info *pi = malloc(sizeof(struct process_info));
+  sema_init(&pi->load_sema, 0);
+
   char *fn_copy;
   tid_t tid;
 
@@ -41,18 +52,31 @@ process_execute (const char *file_name)
   if (fn_copy == NULL)
     return TID_ERROR;
   strlcpy (fn_copy, file_name, PGSIZE);
+  pi->file_name = fn_copy;
+
+  struct process_descriptor *childpd = malloc(sizeof(struct process_descriptor));
+  pi->procdesc = childpd;
 
   /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
-  if (tid == TID_ERROR)
-    palloc_free_page (fn_copy); 
+  tid = thread_create (file_name, PRI_DEFAULT, start_process, pi);
+  if (tid == TID_ERROR) {
+    free(childpd);
+    palloc_free_page (fn_copy);
+    free(pi);
+    return TID_ERROR;
+  } 
 
-  struct thread *cur = thread_current();
-  struct process_descriptor *procdesc = malloc(sizeof(struct process_descriptor));
-  procdesc->exit_status = -1;
-  procdesc->exited = false;
-  sema_init(&procdesc->wait_sema, 0);
-  cur->procdesc = procdesc;
+  // ownership of pi and fn_copy (aux) transferred to child thread
+
+  sema_down(&pi->load_sema);
+  
+  // critical section
+  if (!pi->load_success) {
+    free(childpd);
+    return TID_ERROR;
+  }
+  list_push_back(&thread_current()->procdesc->children, &childpd->elem);
+  // end critical section
 
   return tid;
 }
@@ -60,9 +84,22 @@ process_execute (const char *file_name)
 /* A thread function that loads a user process and starts it
    running. */
 static void
-start_process (void *file_name_)
+start_process (void *aux)
 {
-  char *file_name = file_name_;
+  struct process_info *pi = (struct process_info*)aux;
+  struct thread *cur = thread_current();
+  
+  // critical section  
+  char *file_name = pi->file_name;
+  struct process_descriptor *pd = pi->procdesc;
+  pd->tid = cur->tid;
+  pd->exit_status = -1;
+  pd->exited = false;
+  sema_init(&pd->wait_sema, 0);
+  pd->wait_count = 0;
+  list_init(&pd->children);
+  cur->procdesc = pd;
+  
   struct intr_frame if_;
   bool success;
 
@@ -72,9 +109,15 @@ start_process (void *file_name_)
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
   success = load (file_name, &if_.eip, &if_.esp);
+  pi->load_success = success;
+  // end critical section
+
+  sema_up(&pi->load_sema);
+
+  free(pi);
+  palloc_free_page (file_name);
 
   /* If load failed, quit. */
-  palloc_free_page (file_name);
   if (!success) 
     thread_exit ();
 
@@ -98,7 +141,7 @@ start_process (void *file_name_)
    This function will be implemented in problem 2-2.  For now, it
    does nothing. */
 int
-process_wait (tid_t child_tid UNUSED) 
+process_wait (tid_t child_tid) 
 {
   // TODO: verify tid
   while (1);
