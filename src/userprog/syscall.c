@@ -42,15 +42,20 @@ syscall_handler (struct intr_frame *f UNUSED)
   int syscall_number = *addr;
 
   switch (syscall_number) {
-    case SYS_EXIT:
+    case SYS_WAIT: {
+      int pid = *(addr + 1);
+      // TODO: implement
+      // wait_handler(); 
+      break;
+    }
+    case SYS_EXIT: {
       int status = *(addr + 1);
       exit_handler(status);
       NOT_REACHED();
+    }
     default:
       NOT_REACHED();
   }
-
-
 
   thread_exit ();
 }
