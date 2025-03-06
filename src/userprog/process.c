@@ -29,6 +29,7 @@ struct process_info {
   char *file_name;
   struct process_descriptor *procdesc;
   struct semaphore load_sema;
+  struct semaphore add_sema;
   bool load_success;
 };
 
@@ -42,6 +43,7 @@ process_execute (const char *file_name)
   // dynamically allocate aux data
   struct process_info *pi = malloc(sizeof(struct process_info));
   sema_init(&pi->load_sema, 0);
+  sema_init(&pi->add_sema, 0);
 
   char *fn_copy;
   tid_t tid;
@@ -66,17 +68,21 @@ process_execute (const char *file_name)
     return TID_ERROR;
   } 
 
-  // ownership of pi and fn_copy (aux) transferred to child thread
+  // transfer ownership of pi to child
 
+  // wait for child to finish loading
   sema_down(&pi->load_sema);
-  
-  // critical section
+
+  // maintain ownership of and free fn_copy
+  palloc_free_page (fn_copy);
+
   if (!pi->load_success) {
+    sema_up(&pi->add_sema);
     free(childpd);
     return TID_ERROR;
   }
   list_push_back(&thread_current()->procdesc->children, &childpd->elem);
-  // end critical section
+  sema_up(&pi->add_sema);
 
   return tid;
 }
@@ -89,14 +95,13 @@ start_process (void *aux)
   struct process_info *pi = (struct process_info*)aux;
   struct thread *cur = thread_current();
   
-  // critical section  
   char *file_name = pi->file_name;
   struct process_descriptor *pd = pi->procdesc;
   pd->tid = cur->tid;
   pd->exit_status = -1;
   pd->exited = false;
   sema_init(&pd->wait_sema, 0);
-  pd->wait_count = 0;
+  pd->waited_on = false;
   list_init(&pd->children);
   cur->procdesc = pd;
   
@@ -110,12 +115,14 @@ start_process (void *aux)
   if_.eflags = FLAG_IF | FLAG_MBS;
   success = load (file_name, &if_.eip, &if_.esp);
   pi->load_success = success;
-  // end critical section
 
+  // parent may now add to list
   sema_up(&pi->load_sema);
 
+  // don't exit until parent adds child to list
+  sema_down(&pi->add_sema);
+
   free(pi);
-  palloc_free_page (file_name);
 
   /* If load failed, quit. */
   if (!success) 

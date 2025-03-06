@@ -9,8 +9,8 @@ struct process_descriptor {
   tid_t tid;
   int exit_status;
   bool exited;
-  struct semaphore wait_sema;
-  int wait_count;
+  struct semaphore wait_sema; // used for parent blocking upon wait
+  bool waited_on; // used to enforce wait-once Unix semantics
   struct list_elem elem;
   struct list children; // list of child pds (access thread via offset)
   // elem -> process_descriptor -> thread
