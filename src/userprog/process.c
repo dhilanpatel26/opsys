@@ -46,6 +46,14 @@ process_execute (const char *file_name)
   tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
   if (tid == TID_ERROR)
     palloc_free_page (fn_copy); 
+
+  struct thread *cur = thread_current();
+  struct process_descriptor *procdesc = malloc(sizeof(struct process_descriptor));
+  procdesc->exit_status = -1;
+  procdesc->exited = false;
+  sema_init(&procdesc->wait_sema, 0);
+  cur->procdesc = procdesc;
+
   return tid;
 }
 

@@ -6,12 +6,12 @@
 #include <list.h>
 
 struct process_descriptor {
-    int exit_status;
-    bool exited;
-    struct semaphore wait_sema;
-    struct list_elem elem;
-    struct list children; // list of child pds (access thread via offset)
-    // elem -> process_descriptor -> thread
+  int exit_status;
+  bool exited;
+  struct semaphore wait_sema;
+  // struct list_elem elem;
+  // struct list children; // list of child pds (access thread via offset)
+  // elem -> process_descriptor -> thread
 };
 
 
