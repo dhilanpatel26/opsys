@@ -230,6 +230,11 @@ process_exit (void)
 
   struct process_descriptor *procdesc = cur->procdesc;
   ASSERT (procdesc != NULL);
+
+  // TODO: may have to omit args, depending on how
+  // file_name was processed in process_execute
+  printf("%s: exit(%d)\n", thread_name(), procdesc->exit_status);
+
   procdesc->exited = true;
 
   sema_up(&procdesc->wait_sema);
