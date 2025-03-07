@@ -70,13 +70,8 @@ exit_handler (int status) {
   struct thread *cur = thread_current();
   struct process_descriptor *procdesc = cur->procdesc;
 
-  if (procdesc != NULL) { // initial thread doesn't have a process
-    // critical section
-    procdesc->exit_status = status;
-    procdesc->exited = true;
-    // end critical section
-    sema_up(&procdesc->wait_sema);
-  }
+  ASSERT (procdesc != NULL);
+  procdesc->exit_status = status;
   
   // process cleanup handled by implicit process_exit
   thread_exit();

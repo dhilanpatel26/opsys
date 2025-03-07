@@ -26,11 +26,12 @@
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
 
+/* Aux data for callback start_process in thread_create of process_execute. */
 struct process_info {
   char *file_name;
   struct process_descriptor *procdesc;
-  struct semaphore load_sema;
-  struct semaphore add_sema;
+  struct semaphore load_sema; // synch access to loading data
+  struct semaphore add_sema; // prevents child from exiting until parent adds to list
   bool load_success;
 };
 
@@ -104,6 +105,8 @@ start_process (void *aux)
   sema_init(&pd->wait_sema, 0);
   pd->waited_on = false;
   list_init(&pd->children);
+  pd->ref_count = 2;
+  lock_init(&pd->ref_lock);
   cur->procdesc = pd;
   
   struct intr_frame if_;
@@ -151,8 +154,52 @@ start_process (void *aux)
 int
 process_wait (tid_t child_tid) 
 {
-  // TODO: verify tid
-  while (1);
+  // validate wait call
+  struct thread *cur = thread_current();
+  struct process_descriptor *curpd = cur->procdesc;
+  struct process_descriptor *childpd = NULL;
+
+  ASSERT (curpd != NULL);
+  struct list *cur_children = &curpd->children; // must be pass-by-ref
+  struct list_elem *e;
+
+  for (e = list_begin(cur_children); e != list_end(cur_children); e = list_next(e)) {
+    childpd = list_entry(e, struct process_descriptor, elem);
+    if (childpd->tid == child_tid) {
+      if (childpd->waited_on) {
+        return -1;
+      } else {
+        childpd->waited_on = true;
+        break;
+      }
+    } else {
+      childpd = NULL;
+    }
+  }
+
+  if (childpd == NULL) {
+    return -1;
+  }
+
+  // parent block AND exit status synch between parent and child
+  sema_down(&childpd->wait_sema);
+
+  // for debugging
+  ASSERT (childpd->exited);
+
+  int status = childpd->exit_status;
+
+  lock_acquire(&childpd->ref_lock);
+  childpd->ref_count--;
+  bool should_free = (childpd->ref_count == 0);
+  lock_release(&childpd->ref_lock);
+
+  if (should_free) {
+    free(childpd);
+  }
+
+  return status;
+
 }
 
 /* Free the current process's resources. */
@@ -160,12 +207,12 @@ void
 process_exit (void)
 {
   struct thread *cur = thread_current ();
-  uint32_t *pd;
+  uint32_t *pdir;
 
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
-  pd = cur->pagedir;
-  if (pd != NULL) 
+  pdir = cur->pagedir;
+  if (pdir != NULL) 
     {
       /* Correct ordering here is crucial.  We must set
          cur->pagedir to NULL before switching page directories,
@@ -176,10 +223,45 @@ process_exit (void)
          that's been freed (and cleared). */
       cur->pagedir = NULL;
       pagedir_activate (NULL);
-      pagedir_destroy (pd);
+      pagedir_destroy (pdir);
     }
 
   // TODO: Close all open files
+
+  struct process_descriptor *procdesc = cur->procdesc;
+  ASSERT (procdesc != NULL);
+  procdesc->exited = true;
+
+  sema_up(&procdesc->wait_sema);
+
+  struct list_elem *e, *next;
+  struct list *children = &procdesc->children; // once again, no synch required (not shared)
+  struct process_descriptor *childpd;
+  for (e = list_begin(children); e != list_end(children); e = next) {
+    next = list_next(e); // necessary because we may free childpd
+    childpd = list_entry(e, struct process_descriptor, elem);
+    lock_acquire(&childpd->ref_lock);
+    childpd->ref_count--;
+    bool child_should_free = (childpd->ref_count == 0);
+    lock_release(&childpd->ref_lock);
+
+    // is this even necessary? list gets destroyed anwyways
+    list_remove(e);
+  
+    if (child_should_free) {
+      free(childpd);
+    }
+  }
+
+  lock_acquire(&procdesc->ref_lock);
+  procdesc->ref_count--;
+  bool should_free = (procdesc->ref_count == 0);
+  lock_release(&procdesc->ref_lock);
+
+  if (should_free) {
+    free(procdesc);
+  }
+
 }
 
 /* Sets up the CPU for running user code in the current

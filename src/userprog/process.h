@@ -6,14 +6,15 @@
 #include <list.h>
 
 struct process_descriptor {
-  tid_t tid;
+  tid_t tid; // id of process's only thread (1:1 mapping)
   int exit_status;
-  bool exited;
+  bool exited; // for debugging and assertion
   struct semaphore wait_sema; // used for parent blocking upon wait
-  bool waited_on; // used to enforce wait-once Unix semantics
+  bool waited_on; // exclusively for parent, used to enforce wait-once Unix semantics
   struct list_elem elem;
   struct list children; // list of child pds (access thread via offset)
-  // elem -> process_descriptor -> thread
+  int ref_count; // starts at 2
+  struct lock ref_lock;
 };
 
 
