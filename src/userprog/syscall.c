@@ -13,7 +13,10 @@
 #include "filesys/filesys.h"
 
 static void syscall_handler (struct intr_frame *);
-static void exit_handler (int status);
+static int wait_handler (int *esp);
+static int create_handler (int *esp);
+static bool validate_string(const char *str);
+static void exit_handler (int *esp);
 static void *translate_uvaddr(void *uptr);
 
 void
@@ -35,54 +38,57 @@ syscall_handler (struct intr_frame *f UNUSED)
 
   switch (syscall_number) {
     case SYS_WAIT: {
-      int *pid_ptr = (int*) translate_uvaddr(esp + 1);
-      if (pid_ptr == NULL) {
-        f->eax = -1;
-        return;
-      }
-      int pid = *pid_ptr;
-      int status = process_wait((tid_t) pid); // 1:1 mapping of proc to thread
-      f->eax = status; // return status to user program
-      break;
+      int success = wait_handler(esp);
+      f->eax = success;
+      return;
     }
     case SYS_EXIT: {
-      int *status_ptr = (int*) translate_uvaddr(esp + 1);
-      if (status_ptr == NULL) {
-        f->eax = -1;
-        return;
-      }
-      int status = *status_ptr;
-      exit_handler(status);
+      exit_handler(esp);
       NOT_REACHED();
     }
     case SYS_CREATE: {
-      char **file_name_ptr = (char**) translate_uvaddr(esp + 1);
-      if (file_name_ptr == NULL) {
-        f->eax = -1;
-        return;
-      }
-      char *file_name = *file_name_ptr;
-      if (file_name == NULL) {
-        f->eax = -1;
-        return;
-      }
-      if (!validate_string(file_name)) {
-        f->eax = -1;
-        return;
-      }
-      unsigned *initial_size_ptr = (unsigned*) translate_uvaddr(esp + 2);
-      if (initial_size_ptr == NULL) {
-        f->eax = -1;
-        return;
-      }
-      unsigned initial_size = *initial_size_ptr;
-      bool success = filesys_create(file_name, initial_size);
+      int success = create_handler(esp);
       f->eax = success;
-      break;
+      return;
     }
     default:
       NOT_REACHED();
   }
+}
+
+static int
+wait_handler (int *esp)
+{
+  int *pid_ptr = (int*) translate_uvaddr(esp + 1);
+  if (pid_ptr == NULL) {
+    return -1;
+  }
+  int pid = *pid_ptr;
+  int status = process_wait((tid_t) pid); // 1:1 mapping of proc to thread
+  return status;
+}
+
+static int
+create_handler (int *esp)
+{
+  char **file_name_ptr = (char**) translate_uvaddr(esp + 1);
+  if (file_name_ptr == NULL) {
+    return -1;
+  }
+  char *file_name = *file_name_ptr;
+  if (file_name == NULL) {
+    return -1;
+  }
+  if (!validate_string(file_name)) {
+    return -1;
+  }
+  unsigned *initial_size_ptr = (unsigned*) translate_uvaddr(esp + 2);
+  if (initial_size_ptr == NULL) {
+    return -1;
+  }
+  unsigned initial_size = *initial_size_ptr;
+  bool success = filesys_create(file_name, initial_size);
+  return success;
 }
 
 static bool validate_string(const char *str) {
@@ -116,12 +122,17 @@ translate_uvaddr(void *uptr) {
 }
 
 static void
-exit_handler (int status) {
+exit_handler (int *esp)
+{
   struct thread *cur = thread_current();
   struct process_descriptor *procdesc = cur->procdesc;
 
+  /* Debugging */
   ASSERT (procdesc != NULL);
-  procdesc->exit_status = status;
+  ASSERT (procdesc->tid == cur->tid);
+  
+  int *status_ptr = (int*) translate_uvaddr(esp + 1);
+  procdesc->exit_status = status_ptr == NULL ? -1 : *status_ptr;
   
   // process cleanup handled by implicit process_exit
   thread_exit();
