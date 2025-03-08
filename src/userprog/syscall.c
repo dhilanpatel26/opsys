@@ -59,11 +59,7 @@ syscall_handler (struct intr_frame *f UNUSED)
 static int
 wait_handler (int *esp)
 {
-  int *pid_ptr = (int*) translate_uvaddr(esp + 1);
-  if (pid_ptr == NULL) {
-    return -1;
-  }
-  int pid = *pid_ptr;
+  int pid = *(int*) translate_uvaddr(esp + 1);
   int status = process_wait((tid_t) pid); // 1:1 mapping of proc to thread
   return status;
 }
@@ -71,22 +67,14 @@ wait_handler (int *esp)
 static int
 create_handler (int *esp)
 {
-  char **file_name_ptr = (char**) translate_uvaddr(esp + 1);
-  if (file_name_ptr == NULL) {
-    return -1;
-  }
-  char *file_name = *file_name_ptr;
-  if (file_name == NULL) {
-    return -1;
-  }
+  char *file_name = *(char**) translate_uvaddr(esp + 1);
+
   if (!validate_string(file_name)) {
     return -1;
   }
-  unsigned *initial_size_ptr = (unsigned*) translate_uvaddr(esp + 2);
-  if (initial_size_ptr == NULL) {
-    return -1;
-  }
-  unsigned initial_size = *initial_size_ptr;
+
+  unsigned initial_size = *(unsigned*) translate_uvaddr(esp + 2);
+
   bool success = filesys_create(file_name, initial_size);
   return success;
 }
@@ -96,9 +84,8 @@ static bool validate_string(const char *str) {
     return false;
   }
   for (;; str++) {
-    if (translate_uvaddr((void*)str) == NULL) {
-      return false;
-    }
+    // exits/segfaults if invalid memory access
+    translate_uvaddr((void*)str);
     if (*str == '\0') {
       break;
     }
@@ -109,13 +96,15 @@ static bool validate_string(const char *str) {
 static void *
 translate_uvaddr(void *uptr) {
   if (uptr == NULL || !is_user_vaddr(uptr)) {
-    return NULL;
+    exit_handler(-1); // invalid memory access, segfault
+    NOT_REACHED();
   }
   
   void *kptr = pagedir_get_page(thread_current()->pagedir, uptr);
   
   if (kptr == NULL) {
-    return NULL;
+    exit_handler(-1); // invalid memory access, segfault
+    NOT_REACHED();
   }
 
   return kptr;
@@ -131,8 +120,8 @@ exit_handler (int *esp)
   ASSERT (procdesc != NULL);
   ASSERT (procdesc->tid == cur->tid);
   
-  int *status_ptr = (int*) translate_uvaddr(esp + 1);
-  procdesc->exit_status = status_ptr == NULL ? -1 : *status_ptr;
+  int status = *(int*) translate_uvaddr(esp + 1);
+  procdesc->exit_status = status;
   
   // process cleanup handled by implicit process_exit
   thread_exit();
