@@ -11,6 +11,7 @@
 #include "userprog/pagedir.h"
 #include "userprog/process.h"
 #include "filesys/filesys.h"
+#include <sys/types.h>
 
 static void syscall_handler (struct intr_frame *);
 static int wait_handler (int *esp);
@@ -18,7 +19,7 @@ static int create_handler (int *esp);
 static bool validate_string(const char *str);
 static void exit_handler (int *esp);
 static void *translate_uvaddr(void *uptr);
-
+static int exec_handler(int *esp);
 void
 syscall_init (void) 
 {
@@ -51,6 +52,27 @@ syscall_handler (struct intr_frame *f UNUSED)
       f->eax = success;
       return;
     }
+    case SYS_EXEC:{
+      tid_t id = exec_handler(esp);
+      f->eax = id;
+      return;
+
+    }
+    case SYS_REMOVE:{
+
+    }
+    case SYS_FILESIZE:{
+
+    }
+    case SYS_READ:{
+
+    }
+    case SYS_SEEK:{
+      
+    }
+    case SYS_TELL:{
+      
+    }
     default:
       NOT_REACHED();
   }
@@ -77,6 +99,16 @@ create_handler (int *esp)
 
   bool success = filesys_create(file_name, initial_size);
   return success;
+}
+exec_handler(int *esp){
+  char *file_name = *(char**) translate_uvaddr(esp + 1);
+
+  if (!validate_string(file_name)) {
+    return -1;
+  }
+
+  tid_t tid = process_execute(file_name);
+  return tid;
 }
 
 static bool validate_string(const char *str) {
