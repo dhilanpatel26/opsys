@@ -44,21 +44,30 @@ process_execute (const char *file_name)
 {
   // dynamically allocate aux data
   struct process_info *pi = malloc(sizeof(struct process_info));
+  if (pi == NULL) return TID_ERROR;
   sema_init(&pi->load_sema, 0);
   sema_init(&pi->add_sema, 0);
-
+  pi->load_success = false;
   char *fn_copy;
   tid_t tid;
 
   /* Make a copy of FILE_NAME.
      Otherwise there's a race between the caller and load(). */
   fn_copy = palloc_get_page (0);
-  if (fn_copy == NULL)
+  if (fn_copy == NULL){
+    free(pi);
     return TID_ERROR;
+  }
+  
   strlcpy (fn_copy, file_name, PGSIZE);
   pi->file_name = fn_copy;
 
   struct process_descriptor *childpd = malloc(sizeof(struct process_descriptor));
+  if (childpd == NULL) {
+    palloc_free_page (fn_copy);
+    free(pi);
+    return TID_ERROR;
+  }
   pi->procdesc = childpd;
 
   /* Create a new thread to execute FILE_NAME. */
@@ -71,6 +80,8 @@ process_execute (const char *file_name)
   } 
 
   // transfer ownership of pi to child
+  
+  
 
   // wait for child to finish loading
   sema_down(&pi->load_sema);
@@ -80,7 +91,6 @@ process_execute (const char *file_name)
 
   if (!pi->load_success) {
     sema_up(&pi->add_sema);
-    free(childpd);
     return TID_ERROR;
   }
   list_push_back(&thread_current()->procdesc->children, &childpd->elem);

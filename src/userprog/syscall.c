@@ -20,7 +20,8 @@ static bool validate_string(const char *str);
 static void exit_handler (int *esp);
 static void *translate_uvaddr(void *uptr);
 static int exec_handler(int *esp);
-void
+static int remove_handler(int *esp);
+
 syscall_init (void) 
 {
   intr_register_int (0x30, 3, INTR_ON, syscall_handler, "syscall");
@@ -55,10 +56,14 @@ syscall_handler (struct intr_frame *f UNUSED)
     case SYS_EXEC:{
       tid_t id = exec_handler(esp);
       f->eax = id;
+      
       return;
 
     }
     case SYS_REMOVE:{
+      int success = remove_handler(esp);
+      f->eax = success;
+      return;
 
     }
     case SYS_FILESIZE:{
@@ -108,7 +113,40 @@ exec_handler(int *esp){
   }
 
   tid_t tid = process_execute(file_name);
+  if (tid == TID_ERROR) {
+    return -1;
+  }
+  // Find the child process descriptor (ensure synchronization)
+  struct thread *cur = thread_current();
+  struct process_descriptor *childpd = NULL;
+  struct list_elem *e;
+
+  for (e = list_begin(&cur->procdesc->children); 
+       e != list_end(&cur->procdesc->children); 
+       e = list_next(e)) {
+    struct process_descriptor *temp_child = list_entry(e, struct process_descriptor, elem);
+    if (temp_child->tid == tid) {
+      childpd = temp_child;
+      break;
+    }
+  }
+
+  if (childpd == NULL || !childpd->exited) {
+    return -1;  // The child process didn't load successfully
+  }
+  
+  // sema_down(&pi->load_sema);
+
   return tid;
+}
+remove_handler(int *esp){
+  char *file_name = *(char**) translate_uvaddr(esp + 1);
+
+  if (!validate_string(file_name)) {
+    return -1;
+  }
+  bool success = filesys_remove(file_name);
+  return success;
 }
 
 static bool validate_string(const char *str) {
