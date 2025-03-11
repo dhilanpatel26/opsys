@@ -21,6 +21,7 @@ static void exit_handler (int status);
 static void *translate_uvaddr(void *uptr);
 static int exec_handler(char *file_name);
 static int open_handler(char *file_name);
+static int close_handler(int fd);
 
 void
 syscall_init (void) 
@@ -70,6 +71,11 @@ syscall_handler (struct intr_frame *f UNUSED)
       f->eax = fd;
       return;
     }
+    case SYS_CLOSE: {
+      int fd = *(int*) translate_uvaddr(esp + 1);
+      int status = close_handler(fd);
+      return;
+    }
     case SYS_REMOVE:{
 
     }
@@ -88,6 +94,23 @@ syscall_handler (struct intr_frame *f UNUSED)
     default:
       NOT_REACHED();
   }
+}
+
+static int
+close_handler (int fd)
+{
+  // closing stdin or stdout is invalid
+  if (fd < 2 || fd >= FILE_TABLE_SIZE) {
+    return -1;
+  }
+  struct thread *cur = thread_current();
+  struct file *file = cur->fd_table[fd];
+  if (file == NULL) {
+    return -1;
+  }
+  file_close(file);
+  cur->fd_table[fd] = NULL;
+  return 0;
 }
 
 static int
