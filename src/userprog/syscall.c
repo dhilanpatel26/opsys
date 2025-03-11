@@ -73,7 +73,7 @@ syscall_handler (struct intr_frame *f UNUSED)
     }
     case SYS_CLOSE: {
       int fd = *(int*) translate_uvaddr(esp + 1);
-      int status = close_handler(fd);
+      close_handler(fd);
       return;
     }
     case SYS_REMOVE:{
