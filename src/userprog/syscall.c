@@ -11,6 +11,7 @@
 #include "userprog/pagedir.h"
 #include "userprog/process.h"
 #include "filesys/filesys.h"
+#include "filesys/file.h"
 
 static void syscall_handler (struct intr_frame *);
 static int wait_handler (int pid);
@@ -20,8 +21,6 @@ static void exit_handler (int status);
 static void *translate_uvaddr(void *uptr);
 static int exec_handler(char *file_name);
 static int open_handler(char *file_name);
-
-static unsigned fd = 2;
 
 void
 syscall_init (void) 
@@ -102,7 +101,16 @@ open_handler (char *file_name)
   if (file == NULL) {
     return -1;
   }
-  return fd++;
+  
+  struct thread *cur = thread_current();
+  for (unsigned fd = 2; fd < FILE_TABLE_SIZE; fd++) {
+    if (cur->fd_table[fd] == NULL) {
+      cur->fd_table[fd] = file;
+      return fd;
+    }
+  }
+  file_close(file);
+  return -1;
 }
 
 static int

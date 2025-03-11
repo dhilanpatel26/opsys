@@ -226,7 +226,12 @@ process_exit (void)
       pagedir_destroy (pdir);
     }
 
-  // TODO: Close all open files
+  for (unsigned fd = 2; fd < FILE_TABLE_SIZE; fd++) {
+    if (cur->fd_table[fd] != NULL) {
+      file_close(cur->fd_table[fd]);
+      cur->fd_table[fd] = NULL;
+    }
+  }
 
   struct process_descriptor *procdesc = cur->procdesc;
   ASSERT (procdesc != NULL);
