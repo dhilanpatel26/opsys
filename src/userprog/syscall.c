@@ -11,17 +11,22 @@
 #include "userprog/pagedir.h"
 #include "userprog/process.h"
 #include "filesys/filesys.h"
-#include <sys/types.h>
+#include "filesys/file.h"
 
 static void syscall_handler (struct intr_frame *);
-static int wait_handler (int *esp);
-static int create_handler (int *esp);
+static int wait_handler (int pid);
+static int create_handler (char *file_name, unsigned initial_size);
 static bool validate_string(const char *str);
-static void exit_handler (int *esp);
+static void exit_handler (int status);
 static void *translate_uvaddr(void *uptr);
 static int exec_handler(int *esp);
 static int remove_handler(int *esp);
 
+static int exec_handler(char *file_name);
+static int open_handler(char *file_name);
+static int close_handler(int fd);
+
+void
 syscall_init (void) 
 {
   intr_register_int (0x30, 3, INTR_ON, syscall_handler, "syscall");
@@ -40,25 +45,40 @@ syscall_handler (struct intr_frame *f UNUSED)
 
   switch (syscall_number) {
     case SYS_WAIT: {
-      int success = wait_handler(esp);
-      f->eax = success;
+      int pid = *(int*) translate_uvaddr(esp + 1);
+      int status = wait_handler(pid);
+      f->eax = status;
       return;
     }
     case SYS_EXIT: {
-      exit_handler(esp);
+      int status = *(int*) translate_uvaddr(esp + 1);
+      exit_handler(status);
       NOT_REACHED();
     }
     case SYS_CREATE: {
-      int success = create_handler(esp);
-      f->eax = success;
+      char *file_name = *(char**) translate_uvaddr(esp + 1);
+      unsigned initial_size = *(unsigned*) translate_uvaddr(esp + 2);
+      int status = create_handler(file_name, initial_size);
+      f->eax = status;
       return;
     }
-    case SYS_EXEC:{
-      tid_t id = exec_handler(esp);
+    case SYS_EXEC: {
+      char *file_name = *(char**) translate_uvaddr(esp + 1);
+      tid_t id = exec_handler(file_name);
       f->eax = id;
       
       return;
-
+    }
+    case SYS_OPEN: {
+      char *file_name = *(char**) translate_uvaddr(esp + 1);
+      int fd = open_handler(file_name);
+      f->eax = fd;
+      return;
+    }
+    case SYS_CLOSE: {
+      int fd = *(int*) translate_uvaddr(esp + 1);
+      close_handler(fd);
+      return;
     }
     case SYS_REMOVE:{
       int success = remove_handler(esp);
@@ -84,28 +104,96 @@ syscall_handler (struct intr_frame *f UNUSED)
 }
 
 static int
-wait_handler (int *esp)
+close_handler (int fd)
 {
-  int pid = *(int*) translate_uvaddr(esp + 1);
+  // closing stdin or stdout is invalid
+  if (fd < 2 || fd >= FILE_TABLE_SIZE) {
+    return -1;
+  }
+  struct thread *cur = thread_current();
+  struct file *file = cur->fd_table[fd];
+  if (file == NULL) {
+    return -1;
+  }
+  file_close(file);
+  cur->fd_table[fd] = NULL;
+  return 0;
+}
+
+static int
+open_handler (char *file_name)
+{
+  // file_name provided as a user vaddr
+  if (!validate_string(file_name)) {
+    return -1;
+  }
+  struct file *file = filesys_open(file_name);
+  if (file == NULL) {
+    return -1;
+  }
+  
+  struct thread *cur = thread_current();
+  for (unsigned fd = 2; fd < FILE_TABLE_SIZE; fd++) {
+    if (cur->fd_table[fd] == NULL) {
+      cur->fd_table[fd] = file;
+      return fd;
+    }
+  }
+  file_close(file);
+  return -1;
+}
+
+static int
+wait_handler (int pid)
+{
   int status = process_wait((tid_t) pid); // 1:1 mapping of proc to thread
   return status;
 }
 
 static int
-create_handler (int *esp)
+create_handler (char *file_name, unsigned initial_size)
 {
-  char *file_name = *(char**) translate_uvaddr(esp + 1);
-
   if (!validate_string(file_name)) {
     return -1;
   }
-
-  unsigned initial_size = *(unsigned*) translate_uvaddr(esp + 2);
-
-  bool success = filesys_create(file_name, initial_size);
-  return success;
+  bool status = filesys_create(file_name, initial_size);
+  return status;
 }
-exec_handler(int *esp){
+
+static int
+exec_handler(char *file_name){
+  if (!validate_string(file_name)) {
+    return -1;
+  }
+  tid_t tid = process_execute(file_name);
+  if (tid == TID_ERROR) {
+    return -1;
+  }
+  // Find the child process descriptor (ensure synchronization)
+  struct thread *cur = thread_current();
+  struct process_descriptor *childpd = NULL;
+  struct list_elem *e;
+
+  for (e = list_begin(&cur->procdesc->children); 
+       e != list_end(&cur->procdesc->children); 
+       e = list_next(e)) {
+    childpd = list_entry(e, struct process_descriptor, elem);
+    if (childpd->tid == tid) {
+      break;
+    } else {
+      childpd = NULL;
+    }
+  }
+
+  if (childpd == NULL || !childpd->exited) {
+    return -1;  // The child process didn't load successfully
+  }
+  
+  // sema_down(&pi->load_sema);
+
+  return tid;
+}
+remove_handler(int *esp){
   char *file_name = *(char**) translate_uvaddr(esp + 1);
 
   if (!validate_string(file_name)) {
@@ -138,15 +226,6 @@ exec_handler(int *esp){
   // sema_down(&pi->load_sema);
 
   return tid;
-}
-remove_handler(int *esp){
-  char *file_name = *(char**) translate_uvaddr(esp + 1);
-
-  if (!validate_string(file_name)) {
-    return -1;
-  }
-  bool success = filesys_remove(file_name);
-  return success;
 }
 
 static bool validate_string(const char *str) {

@@ -4,6 +4,7 @@
 #include <debug.h>
 #include <list.h>
 #include <stdint.h>
+#include "filesys/filesys.h"
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -99,6 +100,7 @@ struct thread
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */
     struct process_descriptor *procdesc;      /* Process descriptor. */
+    struct file *fd_table[FILE_TABLE_SIZE];   /* File descriptor table. */
 #endif
 
     /* Owned by thread.c. */
