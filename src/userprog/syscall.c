@@ -19,6 +19,9 @@ static bool validate_string(const char *str);
 static void exit_handler (int status);
 static void *translate_uvaddr(void *uptr);
 static int exec_handler(char *file_name);
+static int open_handler(char *file_name);
+
+static unsigned fd = 2;
 
 void
 syscall_init (void) 
@@ -56,12 +59,17 @@ syscall_handler (struct intr_frame *f UNUSED)
       f->eax = status;
       return;
     }
-    case SYS_EXEC:{
+    case SYS_EXEC: {
       char *file_name = *(char**) translate_uvaddr(esp + 1);
       tid_t id = exec_handler(file_name);
       f->eax = id;
       return;
-
+    }
+    case SYS_OPEN: {
+      char *file_name = *(char**) translate_uvaddr(esp + 1);
+      int fd = open_handler(file_name);
+      f->eax = fd;
+      return;
     }
     case SYS_REMOVE:{
 
@@ -81,6 +89,20 @@ syscall_handler (struct intr_frame *f UNUSED)
     default:
       NOT_REACHED();
   }
+}
+
+static int
+open_handler (char *file_name)
+{
+  // file_name provided as a user vaddr
+  if (!validate_string(file_name)) {
+    return -1;
+  }
+  struct file *file = filesys_open(file_name);
+  if (file == NULL) {
+    return -1;
+  }
+  return fd++;
 }
 
 static int

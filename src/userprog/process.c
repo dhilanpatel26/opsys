@@ -86,7 +86,7 @@ process_execute (const char *file_name)
   list_push_back(&thread_current()->procdesc->children, &childpd->elem);
   sema_up(&pi->add_sema);
 
-  return tid;
+  return tid; // tid == pid
 }
 
 /* A thread function that loads a user process and starts it
