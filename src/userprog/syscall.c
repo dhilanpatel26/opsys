@@ -22,16 +22,17 @@ static bool create_handler (char *file_name, unsigned initial_size);
 static bool validate_string(const char *str);
 static void exit_handler (int status);
 static void *translate_uvaddr(void *uptr);
-
 static int exec_handler(char *file_name);
 static int open_handler(char *file_name);
 static int close_handler(int fd);
-
 static bool remove_handler(char *file);
 static int filesize_handler(int fd);
 static int read_handler(int fd, void *buffer, unsigned length);
 static void seek_handler(int fd, unsigned position);
 static unsigned tell_handler(int fd);
+static int write_handler (int fd, const void *buffer, unsigned length);
+static void validate_buffer (const void *buffer, unsigned length);
+
 static struct lock filesys_lock; // filesys code is a critical section
 
 
@@ -137,7 +138,7 @@ syscall_handler (struct intr_frame *f UNUSED)
   }
 }
 
-static bool
+static void
 validate_buffer (const void *buffer, unsigned length) {
   char *buf = (char *) buffer;
   for (unsigned i = 0; i < length; i += PGSIZE) {
