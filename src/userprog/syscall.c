@@ -327,7 +327,8 @@ static bool
 create_handler (char *file_name, unsigned initial_size)
 {
   if (!validate_string(file_name)) {
-    return false;
+    exit_handler(-1);  // Terminate the process
+    NOT_REACHED();
   }
   lock_acquire(&filesys_lock);
   bool status = filesys_create(file_name, initial_size);
@@ -498,7 +499,6 @@ validate_string(const char *str) {
     if (c == '\0') {
       break;
     }
-    str++;
   }
   return true;
 }
