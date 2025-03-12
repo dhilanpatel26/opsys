@@ -222,9 +222,13 @@ write_handler (int fd, const void *user_buffer, unsigned length) {
   // if (length > 256) {
   //   length = 256;
   // }
+  if(!validate_buffer(user_buffer, length)){
+    exit_handler(-1);  // Terminate the process
+    NOT_REACHED();
+  }
 
 
-  if (fd == 0) {
+  if (fd <= 0 || fd >= FILE_TABLE_SIZE) {
     return -1;
   }
   
@@ -292,7 +296,8 @@ open_handler (char *file_name)
 {
   // file_name provided as a user vaddr
   if (!validate_string(file_name)) {
-    return -1;
+    exit_handler(-1);  // Terminate the process
+    NOT_REACHED();
   }
 
   lock_acquire(&filesys_lock);
@@ -339,7 +344,8 @@ create_handler (char *file_name, unsigned initial_size)
 static int
 exec_handler(char *file_name){
   if (!validate_string(file_name)) {
-    return -1;
+    exit_handler(-1);  // Terminate the process
+    NOT_REACHED();
   }
   tid_t tid = process_execute(file_name);
   if (tid == TID_ERROR) {
@@ -371,7 +377,8 @@ exec_handler(char *file_name){
 static bool 
 remove_handler(char *file_name){
   if (!validate_string(file_name)) {
-    return false;
+    exit_handler(-1);  // Terminate the process
+    NOT_REACHED();
   }
   // struct thread *cur = thread_current();
 
@@ -402,7 +409,8 @@ filesize_handler(int fd){
 static int
 read_handler(int fd, void *user_buffer, unsigned length) {
   if (!validate_buffer(user_buffer, length)) {
-    return -1;
+    exit_handler(-1);  // Terminate the process
+    NOT_REACHED();
   }
 
   struct thread *cur = thread_current();
