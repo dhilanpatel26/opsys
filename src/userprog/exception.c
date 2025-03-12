@@ -149,17 +149,29 @@ page_fault (struct intr_frame *f)
   write = (f->error_code & PF_W) != 0;
   user = (f->error_code & PF_U) != 0;
 
-  if (user) {
-   intr_dump_frame (f);
-   thread_exit ();
-  } else if (fault_addr < PHYS_BASE && is_user_vaddr(fault_addr)) {
+  // case one: handle kernel access to user memory
+  if (!user && fault_addr < PHYS_BASE && is_user_vaddr(fault_addr)) {
    f->eip = (void*) f->eax;
    f->eax = 0xffffffff;
    return;
-  } else {
-   intr_dump_frame (f);
-   PANIC ("Kernel page fault");
   }
+
+  // case two: the user process is causing page fault
+  if (user) {
+   printf ("Page fault at %p: %s error %s page in %s context.\n",
+         fault_addr,
+         not_present ? "not present" : "rights violation",
+         write ? "writing" : "reading",
+         user ? "user" : "kernel");
+   
+   exit_handler(-1);
+   NOT_REACHED();
+  }
+
+  // case three: if we get here, then the kernel is accessing 
+  // kernel memory improperly somehow
+  PANIC ("Kernel page fault at %p", fault_addr);
+
 
 //   /* To implement virtual memory, delete the rest of the function
 //      body, and replace it with code that brings in the page to
