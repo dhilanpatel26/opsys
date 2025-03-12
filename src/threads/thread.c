@@ -11,7 +11,6 @@
 #include "threads/switch.h"
 #include "threads/synch.h"
 #include "threads/vaddr.h"
-#include "threads/malloc.h"
 #ifdef USERPROG
 #include "userprog/process.h"
 #endif
@@ -101,16 +100,15 @@ thread_init (void)
   initial_thread->tid = allocate_tid ();
 
   #ifdef USERPROG
-    struct process_descriptor *pd = malloc(sizeof(struct process_descriptor));
-    if (pd != NULL) {
-      pd->tid = initial_thread->tid;
-      pd->exit_status = -1;
-      pd->exited = false;
-      sema_init(&pd->wait_sema, 0);
-      pd->waited_on = false;
-      list_init(&pd->children);
-      initial_thread->procdesc = pd;
-    }
+    // process-scoped
+    static struct process_descriptor initial_pd;
+    initial_pd.tid = initial_thread->tid;
+    initial_pd.exit_status = -1;
+    initial_pd.exited = false;
+    sema_init(&initial_pd.wait_sema, 0);
+    initial_pd.waited_on = false;
+    list_init(&initial_pd.children);
+    initial_thread->procdesc = &initial_pd;
   #endif
 }
 
