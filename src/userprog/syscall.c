@@ -175,6 +175,11 @@ validate_buffer (const void *buffer, unsigned length) {
     return true;
   }
 
+  // check if buffer is a user vaddr
+  if (!is_user_vaddr(buffer) || !is_user_vaddr(buffer + length - 1)) {
+    return false;
+  }
+
   const uint8_t *buf = (const uint8_t *) buffer;
   if (get_user(buf) == -1) {
     return false;
@@ -417,6 +422,10 @@ filesize_handler(int fd){
 
 static int
 read_handler(int fd, void *user_buffer, unsigned length) {
+  if (length == 0) {
+    return 0;
+  }
+
   if (!validate_buffer(user_buffer, length)) {
     exit_handler(-1);  // Terminate the process
     NOT_REACHED();
