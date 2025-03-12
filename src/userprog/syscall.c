@@ -48,12 +48,12 @@ syscall_init (void)
 static void
 syscall_handler (struct intr_frame *f) 
 {  
-  printf("syscall handler\n");
+  // printf("syscall handler\n");
   // relevant stack data is 4 bytes and aligned
   int *esp = f->esp; // user virtual memory
 
   int syscall_number = *(int*) translate_uvaddr(esp);
-  printf("syscall: %d\n", syscall_number);
+  // printf("syscall: %d\n", syscall_number);
 
 
   switch (syscall_number) {
