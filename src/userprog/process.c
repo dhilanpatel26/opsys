@@ -62,8 +62,22 @@ process_execute (const char *file_name)
   strlcpy (fn_copy, file_name, PGSIZE);
   pi->file_name = fn_copy;
 
+  // get just the program name for thread name
+  char *program_name;
+  char *save_ptr;
+  char *thread_name = palloc_get_page(0);
+  if (thread_name == NULL) {
+    palloc_free_page(fn_copy);
+    free(pi);
+    return TID_ERROR;
+  }
+  strlcpy(thread_name, file_name, PGSIZE);
+  program_name = strtok_r(thread_name, " ", &save_ptr);
+  
+
   struct process_descriptor *childpd = malloc(sizeof(struct process_descriptor));
   if (childpd == NULL) {
+    palloc_free_page(thread_name);
     palloc_free_page (fn_copy);
     free(pi);
     return TID_ERROR;
@@ -71,7 +85,11 @@ process_execute (const char *file_name)
   pi->procdesc = childpd;
 
   /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create (file_name, PRI_DEFAULT, start_process, pi);
+  tid = thread_create (program_name, PRI_DEFAULT, start_process, pi);
+
+  // free thread name
+  palloc_free_page(thread_name);
+
   if (tid == TID_ERROR) {
     free(childpd);
     palloc_free_page (fn_copy);
