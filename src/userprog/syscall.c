@@ -167,8 +167,12 @@ put_user (uint8_t *udst, uint8_t byte)
 
 static bool
 validate_buffer (const void *buffer, unsigned length) {
-  if (buffer == NULL || length == 0) {
+  if (buffer == NULL) {
     return false;
+  }
+
+  if (length == 0) {
+    return true;
   }
 
   const uint8_t *buf = (const uint8_t *) buffer;
@@ -191,6 +195,10 @@ validate_buffer (const void *buffer, unsigned length) {
 
 static void *
 kernel_buffer_copy (const void *user_buffer, unsigned length) {
+  if (length == 0) {
+    return NULL;
+  }
+
   // buffer is a user vaddr
   if (!validate_buffer(user_buffer, length)) {
     return NULL;
@@ -219,9 +227,10 @@ kernel_buffer_copy (const void *user_buffer, unsigned length) {
 
 static int
 write_handler (int fd, const void *user_buffer, unsigned length) {
-  // if (length > 256) {
-  //   length = 256;
-  // }
+  if (length == 0) {
+    return 0;
+  }
+
   if(!validate_buffer(user_buffer, length)){
     exit_handler(-1);  // Terminate the process
     NOT_REACHED();
