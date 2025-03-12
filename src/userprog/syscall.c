@@ -89,6 +89,9 @@ syscall_handler (struct intr_frame *f UNUSED)
     }
     case SYS_FILESIZE:{
       int fd = *(int*) translate_uvaddr(esp + 1);
+      int size = filesize_handler(fd);
+      f->eax = size;
+      return;
 
     }
     case SYS_READ:{
@@ -216,6 +219,19 @@ remove_handler(char *file_name){
   return status;
 }
 
+static int
+filesize_handler(int fd){
+  if (fd < 2 || fd >= FILE_TABLE_SIZE) {
+    return -1;
+  }
+  struct thread *cur = thread_current();
+  struct file *file = cur->fd_table[fd];
+  if (file == NULL) {
+    return -1;
+  }
+
+  return file_length(file);
+}
 
 
 static bool validate_string(const char *str) {
