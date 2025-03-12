@@ -14,6 +14,7 @@
 #include "filesys/file.h"
 #include "devices/input.h"
 #include "lib/kernel/stdio.h"
+#include "threads/palloc.h"
 
 
 static void syscall_handler (struct intr_frame *);
@@ -31,7 +32,7 @@ static int read_handler(int fd, void *buffer, unsigned length);
 static void seek_handler(int fd, unsigned position);
 static unsigned tell_handler(int fd);
 static int write_handler (int fd, const void *buffer, unsigned length);
-static void validate_buffer (const void *buffer, unsigned length);
+static bool validate_buffer (const void *buffer, unsigned length);
 
 static struct lock filesys_lock; // filesys code is a critical section
 
@@ -45,14 +46,15 @@ syscall_init (void)
 
 // called by user thread in kernel mode (has a process)
 static void
-syscall_handler (struct intr_frame *f UNUSED) 
-{
-  printf ("system call!\n");
-  
+syscall_handler (struct intr_frame *f) 
+{  
+  printf("syscall handler\n");
   // relevant stack data is 4 bytes and aligned
   int *esp = f->esp; // user virtual memory
 
   int syscall_number = *(int*) translate_uvaddr(esp);
+  printf("syscall: %d\n", syscall_number);
+
 
   switch (syscall_number) {
     case SYS_WAIT: {
@@ -106,7 +108,7 @@ syscall_handler (struct intr_frame *f UNUSED)
     }
     case SYS_READ:{
       int fd = *(int*) translate_uvaddr(esp + 1);
-      void *buffer = translate_uvaddr(*(void**)(esp + 2));
+      void *buffer = *(void**) translate_uvaddr(esp + 2);
       unsigned length = *(unsigned*) translate_uvaddr(esp + 3);
       int bytes_read = read_handler(fd, buffer, length);
       f->eax = bytes_read;
@@ -127,8 +129,8 @@ syscall_handler (struct intr_frame *f UNUSED)
     }
     case SYS_WRITE: {
       int fd = *(int*) translate_uvaddr(esp + 1);
-      const void *buffer = *(void**)(esp + 2);
-      unsigned length = *(unsigned*)(esp + 3);
+      const void *buffer = *(void**) translate_uvaddr(esp + 2);
+      unsigned length = *(unsigned*) translate_uvaddr(esp + 3);
       int bytes_written = write_handler(fd, buffer, length);
       f->eax = bytes_written;
       return;
@@ -138,27 +140,110 @@ syscall_handler (struct intr_frame *f UNUSED)
   }
 }
 
-static void
+/* Reads a byte at user virtual address UADDR.
+UADDR must be below PHYS_BASE.
+Returns the byte value if successful, -1 if a segfault
+occurred. */
+static int
+get_user (const uint8_t *uaddr)
+{
+  int result;
+  asm ("movl $1f, %0; movzbl %1, %0; 1:"
+      : "=&a" (result) : "m" (*uaddr));
+  return result;
+}
+
+/* Writes BYTE to user address UDST.
+  UDST must be below PHYS_BASE.
+  Returns true if successful, false if a segfault occurred. */
+static bool
+put_user (uint8_t *udst, uint8_t byte)
+{
+  int error_code;
+  asm ("movl $1f, %0; movb %b2, %1; 1:"
+      : "=&a" (error_code), "=m" (*udst) : "q" (byte));
+  return error_code != -1;
+}
+
+static bool
 validate_buffer (const void *buffer, unsigned length) {
-  char *buf = (char *) buffer;
-  for (unsigned i = 0; i < length; i += PGSIZE) {
-    translate_uvaddr(buf + i);
+  if (buffer == NULL || length == 0) {
+    return false;
   }
-  if (length % PGSIZE != 0) {
-    translate_uvaddr(buf + length - 1);
+
+  const uint8_t *buf = (const uint8_t *) buffer;
+  if (get_user(buf) == -1) {
+    return false;
   }
+
+  if (length > 1 && get_user(buf + length - 1) == -1) {
+    return false;
+  }
+
+  for (unsigned i = PGSIZE; i < length; i += PGSIZE) {
+    if (get_user(buf + i) == -1) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+static void *
+kernel_buffer_copy (const void *user_buffer, unsigned length) {
+  // buffer is a user vaddr
+  if (!validate_buffer(user_buffer, length)) {
+    return NULL;
+  }
+
+  void *kernel_buffer = palloc_get_page(0);
+  if (kernel_buffer == NULL) {
+    return NULL;
+  }
+
+  const char *source = (char*) user_buffer;
+  char *dst = kernel_buffer;
+
+  // Copy byte by byte using get_user
+  for (unsigned i = 0; i < length; i++) {
+    int byte = get_user(source + i);
+    if (byte == -1) {
+      palloc_free_page(kernel_buffer);
+      return NULL;
+    }
+    dst[i] = (uint8_t)byte;
+  }
+
+  return kernel_buffer;
 }
 
 static int
-write_handler (int fd, const void *buffer, unsigned length) {
-  validate_buffer(buffer, length);
-  
+write_handler (int fd, const void *user_buffer, unsigned length) {
+  // if (length > 256) {
+  //   length = 256;
+  // }
+
+
   if (fd == 0) {
     return -1;
   }
   
   if (fd == 1) {
-    putbuf(buffer, length);
+    void *kernel_buffer = kernel_buffer_copy(user_buffer, length);
+    if (kernel_buffer == NULL) {
+      return -1;
+    }
+
+    // // Manually copy the first few bytes to be ultra-safe
+    // char safe_buffer[256];
+    // for (unsigned i = 0; i < length; i++) {
+    //   void *src_ptr = translate_uvaddr((void*)((char*)user_buffer + i));
+    //   safe_buffer[i] = *(char*)src_ptr;
+    // }
+
+    putbuf(kernel_buffer, length);
+    // putbuf(safe_buffer, length);
+    palloc_free_page(kernel_buffer);
     return length;
   }
 
@@ -169,10 +254,16 @@ write_handler (int fd, const void *buffer, unsigned length) {
     return -1;
   }
 
+  void *kernel_buffer = kernel_buffer_copy(user_buffer, length);
+  if (kernel_buffer == NULL) {
+    return -1;
+  }
+
   lock_acquire(&filesys_lock);
-  int bytes_written = file_write(file, buffer, length);
+  int bytes_written = file_write(file, kernel_buffer, length);
   lock_release(&filesys_lock);
   
+  palloc_free_page(kernel_buffer);
   return (bytes_written >= 0) ? bytes_written : -1;
 }
 
@@ -269,12 +360,10 @@ exec_handler(char *file_name){
     }
   }
 
-  if (childpd == NULL || !childpd->exited) {
-    return -1;  // The child process didn't load successfully
+  if (childpd == NULL) {
+    return -1;
   }
   
-  // sema_down(&pi->load_sema);
-
   return tid;
 }
 
@@ -310,38 +399,70 @@ filesize_handler(int fd){
 
 
 static int
-read_handler(int fd, void *buffer, unsigned length){
-  //invalid buffer
-  if (buffer == NULL||!is_user_vaddr(buffer)) {
+read_handler(int fd, void *user_buffer, unsigned length) {
+  if (!validate_buffer(user_buffer, length)) {
     return -1;
   }
 
   struct thread *cur = thread_current();
   if (fd == 0) {
     // read from stdin
+    void *kernel_buffer = palloc_get_page(0);
+    if (kernel_buffer == NULL) {
+      return -1;
+    }
     unsigned i;
     for (i = 0; i < length; i++) {
-      ((uint8_t*) buffer)[i] = input_getc();
+      ((uint8_t*) kernel_buffer)[i] = input_getc();
     }
-    return length;
+
+    for (unsigned j = 0; j < i; j++) {
+      if (!put_user((uint8_t*) user_buffer + j, ((uint8_t*) kernel_buffer)[j])) {
+        palloc_free_page(kernel_buffer);
+        return -1;
+      }
+    }
+
+    palloc_free_page(kernel_buffer);
+    return i;
   }
+
   // trying to read from stout or invalid fd
   if (fd < 2 || fd >= FILE_TABLE_SIZE || cur->fd_table[fd] == NULL) {
-        return -1;
+    return -1;
   }
     
   struct file *file = cur->fd_table[fd];
+  if (file == NULL) {
+    return -1;
+  }
+
+  void *kernel_buffer = palloc_get_page(0);
+  if (kernel_buffer == NULL) {
+    return -1;
+  }
+
   lock_acquire(&filesys_lock);  // Ensure thread safety
-  int bytes_read = file_read(file, buffer, length);
+  int bytes_read = file_read(file, kernel_buffer, length);
   lock_release(&filesys_lock);
 
+  if (bytes_read > 0) {
+    for (int i = 0; i < bytes_read; i++) {
+      if (!put_user((uint8_t*) user_buffer + i, ((uint8_t*) kernel_buffer)[i])) {
+        palloc_free_page(kernel_buffer);
+        return -1;
+      }
+    }
+  }
+
+  palloc_free_page(kernel_buffer);
   return (bytes_read >= 0) ? bytes_read : -1; 
 }
 
 static void
 seek_handler(int fd, unsigned position){
   struct thread *cur = thread_current();
-  if (fd < 2 || fd >= FILE_TABLE_SIZE||cur->fd_table[fd]) {
+  if (fd < 2 || fd >= FILE_TABLE_SIZE || cur->fd_table[fd] == NULL) {
     return;
   }
   struct file *file = cur->fd_table[fd];
@@ -353,7 +474,7 @@ seek_handler(int fd, unsigned position){
 static unsigned
 tell_handler(int fd){
   struct thread *cur = thread_current();
-  if (fd < 2 || fd >= FILE_TABLE_SIZE||cur->fd_table[fd]) {
+  if (fd < 2 || fd >= FILE_TABLE_SIZE || cur->fd_table[fd] == NULL) {
     return -1;
   }
   struct file *file = cur->fd_table[fd];
@@ -370,11 +491,14 @@ validate_string(const char *str) {
     return false;
   }
   for (;; str++) {
-    // exits/segfaults if invalid memory access
-    translate_uvaddr((void*)str);
-    if (*str == '\0') {
+    int c = get_user((uint8_t*) str);
+    if (c == -1) {
+      return false; // invalid memory access, segfault
+    }
+    if (c == '\0') {
       break;
     }
+    str++;
   }
   return true;
 }
@@ -385,9 +509,13 @@ translate_uvaddr(void *uptr) {
     exit_handler(-1); // invalid memory access, segfault
     NOT_REACHED();
   }
+
+  if (get_user((uint8_t*) uptr) == -1) {
+    exit_handler(-1); // invalid memory access, segfault
+    NOT_REACHED();
+  }
   
   void *kptr = pagedir_get_page(thread_current()->pagedir, uptr);
-  
   if (kptr == NULL) {
     exit_handler(-1); // invalid memory access, segfault
     NOT_REACHED();
