@@ -15,15 +15,17 @@
 
 static void syscall_handler (struct intr_frame *);
 static int wait_handler (int pid);
-static int create_handler (char *file_name, unsigned initial_size);
+static bool create_handler (char *file_name, unsigned initial_size);
 static bool validate_string(const char *str);
 static void exit_handler (int status);
 static void *translate_uvaddr(void *uptr);
-static int remove_handler(int *esp);
 
 static int exec_handler(char *file_name);
 static int open_handler(char *file_name);
 static int close_handler(int fd);
+
+static bool remove_handler(char *file);
+static int filesize_handler(int fd);
 
 void
 syscall_init (void) 
@@ -57,7 +59,7 @@ syscall_handler (struct intr_frame *f UNUSED)
     case SYS_CREATE: {
       char *file_name = *(char**) translate_uvaddr(esp + 1);
       unsigned initial_size = *(unsigned*) translate_uvaddr(esp + 2);
-      int status = create_handler(file_name, initial_size);
+      bool status = create_handler(file_name, initial_size);
       f->eax = status;
       return;
     }
@@ -80,21 +82,29 @@ syscall_handler (struct intr_frame *f UNUSED)
       return;
     }
     case SYS_REMOVE:{
-      int success = remove_handler(esp);
-      f->eax = success;
+      char *file_name = *(char**) translate_uvaddr(esp + 1);
+      bool status = remove_handler(file_name);
+      f->eax = status; 
       return;
-
     }
     case SYS_FILESIZE:{
+      int fd = *(int*) translate_uvaddr(esp + 1);
 
     }
     case SYS_READ:{
+      int fd = *(int*) translate_uvaddr(esp + 1);
+      void *buffer = translate_uvaddr(*(void**)(esp + 2));
+      unsigned length = *(unsigned*) translate_uvaddr(esp + 3);
+
 
     }
     case SYS_SEEK:{
+      int fd = *(int*) translate_uvaddr(esp + 1);
+      unsigned position = *(unsigned*) translate_uvaddr(esp + 2);
       
     }
     case SYS_TELL:{
+      int fd = *(int*) translate_uvaddr(esp + 1);
       
     }
     default:
@@ -114,6 +124,7 @@ close_handler (int fd)
   if (file == NULL) {
     return -1;
   }
+
   file_close(file);
   cur->fd_table[fd] = NULL;
   return 0;
@@ -149,11 +160,11 @@ wait_handler (int pid)
   return status;
 }
 
-static int
+static bool
 create_handler (char *file_name, unsigned initial_size)
 {
   if (!validate_string(file_name)) {
-    return -1;
+    return false;
   }
   bool status = filesys_create(file_name, initial_size);
   return status;
@@ -192,9 +203,20 @@ exec_handler(char *file_name){
 
   return tid;
 }
-remove_handler(int *esp){
-  
+
+static bool 
+remove_handler(char *file_name){
+  if (!validate_string(file_name)) {
+    return false;
+  }
+  struct thread *cur = thread_current();
+
+//TODO: needs to ensure standard unix semantics for file removal when its open
+  bool status = filesys_remove(file_name);
+  return status;
 }
+
+
 
 static bool validate_string(const char *str) {
   if (str == NULL) {
@@ -228,7 +250,7 @@ translate_uvaddr(void *uptr) {
 }
 
 static void
-exit_handler (int *esp)
+exit_handler (int status)
 {
   struct thread *cur = thread_current();
   struct process_descriptor *procdesc = cur->procdesc;
@@ -237,7 +259,6 @@ exit_handler (int *esp)
   ASSERT (procdesc != NULL);
   ASSERT (procdesc->tid == cur->tid);
   
-  int status = *(int*) translate_uvaddr(esp + 1);
   procdesc->exit_status = status;
   
   // process cleanup handled by implicit process_exit
