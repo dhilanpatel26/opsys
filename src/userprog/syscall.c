@@ -27,7 +27,8 @@ static int close_handler(int fd);
 static bool remove_handler(char *file);
 static int filesize_handler(int fd);
 static int read_handler(int fd, void *buffer, unsigned length);
-
+static void seek_handler(int fd, unsigned position);
+static unsigned tell_handler(int fd);
 static struct lock filesys_lock;
 
 
@@ -110,10 +111,16 @@ syscall_handler (struct intr_frame *f UNUSED)
     case SYS_SEEK:{
       int fd = *(int*) translate_uvaddr(esp + 1);
       unsigned position = *(unsigned*) translate_uvaddr(esp + 2);
-      
+      seek_handler(fd, position);
+
     }
     case SYS_TELL:{
       int fd = *(int*) translate_uvaddr(esp + 1);
+      unsigned position = tell_handler(fd);
+      f->eax = position;
+      return;
+    }
+    case SYS_WRITE:{
       
     }
     default:
@@ -267,6 +274,30 @@ read_handler(int fd, void *buffer, unsigned length){
   lock_release(&filesys_lock);
 
   return (bytes_read >= 0) ? bytes_read : -1; 
+}
+static void
+seek_handler(int fd, unsigned position){
+  struct thread *cur = thread_current();
+  if (fd < 2 || fd >= FILE_TABLE_SIZE||cur->fd_table[fd]) {
+    return;
+  }
+  struct file *file = cur->fd_table[fd];
+  lock_acquire(&filesys_lock);
+  file_seek(file, position);
+  lock_release(&filesys_lock);
+} 
+
+static unsigned
+tell_handler(int fd){
+  struct thread *cur = thread_current();
+  if (fd < 2 || fd >= FILE_TABLE_SIZE||cur->fd_table[fd]) {
+    return -1;
+  }
+  struct file *file = cur->fd_table[fd];
+  lock_acquire(&filesys_lock);
+  unsigned position = file_tell(file);
+  lock_release(&filesys_lock);
+  return position;
 }
 
 
