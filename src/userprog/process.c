@@ -678,8 +678,12 @@ setup_stack_args_helper (void **esp, const char *file_name)
   *(void**)*esp = NULL;
 
   palloc_free_page(fn_copy);
-  return true;
 
+  // print out stack contents for debugging purposes
+  // printf("Arguments setup complete. Stack contents:\n");
+  // hex_dump((uintptr_t)*esp, *esp, PHYS_BASE - *esp, true);
+
+  return true;
 }
 
 
