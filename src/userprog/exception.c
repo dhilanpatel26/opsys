@@ -164,7 +164,7 @@ page_fault (struct intr_frame *f)
          write ? "writing" : "reading",
          user ? "user" : "kernel");
    
-   exit_handler(-1);
+   thread_exit();
    NOT_REACHED();
   }
 

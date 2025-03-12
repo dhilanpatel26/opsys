@@ -206,7 +206,7 @@ kernel_buffer_copy (const void *user_buffer, unsigned length) {
 
   // Copy byte by byte using get_user
   for (unsigned i = 0; i < length; i++) {
-    int byte = get_user(source + i);
+    int byte = get_user((const uint8_t *)source + i);
     if (byte == -1) {
       palloc_free_page(kernel_buffer);
       return NULL;
