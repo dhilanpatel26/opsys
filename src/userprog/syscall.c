@@ -26,10 +26,15 @@ static int close_handler(int fd);
 
 static bool remove_handler(char *file);
 static int filesize_handler(int fd);
+static int read_handler(int fd, void *buffer, unsigned length);
+
+static struct lock filesys_lock;
+
 
 void
 syscall_init (void) 
 {
+  lock_init(&filesys_lock);
   intr_register_int (0x30, 3, INTR_ON, syscall_handler, "syscall");
 }
 
@@ -98,8 +103,9 @@ syscall_handler (struct intr_frame *f UNUSED)
       int fd = *(int*) translate_uvaddr(esp + 1);
       void *buffer = translate_uvaddr(*(void**)(esp + 2));
       unsigned length = *(unsigned*) translate_uvaddr(esp + 3);
-
-
+      int bytes_read = read_handler(fd, buffer, length);
+      f->eax = bytes_read;
+      return;
     }
     case SYS_SEEK:{
       int fd = *(int*) translate_uvaddr(esp + 1);
@@ -231,6 +237,36 @@ filesize_handler(int fd){
   }
 
   return file_length(file);
+}
+
+
+static int
+read_handler(int fd, void *buffer, unsigned length){
+  //invalid buffer
+  if (buffer == NULL||!is_user_vaddr(buffer)) {
+    return -1;
+  }
+
+  struct thread *cur = thread_current();
+  if (fd == 0) {
+    // read from stdin
+    unsigned i;
+    for (i = 0; i < length; i++) {
+      ((uint8_t*) buffer)[i] = input_getc();
+    }
+    return length;
+  }
+  // trying to read from stout or invalid fd
+  if (fd < 2 || fd >= FILE_TABLE_SIZE || cur->fd_table[fd] == NULL) {
+        return -1;
+  }
+    
+  struct file *file = cur->fd_table[fd];
+  lock_acquire(&filesys_lock);  // Ensure thread safety
+  int bytes_read = file_read(file, buffer, length);
+  lock_release(&filesys_lock);
+
+  return (bytes_read >= 0) ? bytes_read : -1; 
 }
 
 
