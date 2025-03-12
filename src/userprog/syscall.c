@@ -189,6 +189,7 @@ validate_buffer (const void *buffer, unsigned length) {
     return false;
   }
 
+  // check the bytes at the page boundaries
   for (unsigned i = PGSIZE; i < length; i += PGSIZE) {
     if (get_user(buf + i) == -1) {
       return false;
@@ -209,7 +210,10 @@ kernel_buffer_copy (const void *user_buffer, unsigned length) {
     return NULL;
   }
 
-  void *kernel_buffer = palloc_get_page(0);
+  // calculate how many pages we need based on whats in the buffer
+  size_t page_count = (length + PGSIZE - 1) / PGSIZE;
+
+  void *kernel_buffer = palloc_get_multiple(0, page_count);
   if (kernel_buffer == NULL) {
     return NULL;
   }
@@ -221,7 +225,7 @@ kernel_buffer_copy (const void *user_buffer, unsigned length) {
   for (unsigned i = 0; i < length; i++) {
     int byte = get_user((const uint8_t *)source + i);
     if (byte == -1) {
-      palloc_free_page(kernel_buffer);
+      palloc_free_multiple(kernel_buffer, page_count);
       return NULL;
     }
     dst[i] = (uint8_t)byte;
@@ -236,16 +240,24 @@ write_handler (int fd, const void *user_buffer, unsigned length) {
     return 0;
   }
 
+  // Loop 1: Before buffer validation
+  // for(;;);
+
   if(!validate_buffer(user_buffer, length)){
     exit_handler(-1);  // Terminate the process
     NOT_REACHED();
   }
 
+  // Loop 2: After buffer validation, before fd checks
+  // for(;;);
 
   if (fd <= 0 || fd >= FILE_TABLE_SIZE) {
     return -1;
   }
   
+  // Loop 3: Before stdout handling
+  // for(;;);
+
   if (fd == 1) {
     void *kernel_buffer = kernel_buffer_copy(user_buffer, length);
     if (kernel_buffer == NULL) {
@@ -265,6 +277,9 @@ write_handler (int fd, const void *user_buffer, unsigned length) {
     return length;
   }
 
+  // Loop 4: Before file operations
+  // for(;;);
+
   struct thread *cur = thread_current();
 
   struct file *file = cur->fd_table[fd];
@@ -276,6 +291,9 @@ write_handler (int fd, const void *user_buffer, unsigned length) {
   if (kernel_buffer == NULL) {
     return -1;
   }
+
+  // Loop 5: Before actual file write
+  // for(;;);
 
   lock_acquire(&filesys_lock);
   int bytes_written = file_write(file, kernel_buffer, length);
