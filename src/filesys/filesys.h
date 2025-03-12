@@ -11,7 +11,8 @@
 #define FILE_TABLE_SIZE 64
 
 /* Block device that contains the file system. */
-struct block *fs_device;
+/* Declare fs_device as an external variable to prevent multiple definitions */
+extern struct block *fs_device;  
 
 void filesys_init (bool format);
 void filesys_done (void);

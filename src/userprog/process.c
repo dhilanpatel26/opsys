@@ -68,7 +68,6 @@ process_execute (const char *file_name)
     free(pi);
     return TID_ERROR;
   }
-  sema_down(&pi->load_sema);
   pi->procdesc = childpd;
 
   /* Create a new thread to execute FILE_NAME. */
@@ -92,6 +91,7 @@ process_execute (const char *file_name)
 
   if (!pi->load_success) {
     sema_up(&pi->add_sema);
+    free(childpd);
     return TID_ERROR;
   }
   list_push_back(&thread_current()->procdesc->children, &childpd->elem);

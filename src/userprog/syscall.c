@@ -12,6 +12,8 @@
 #include "userprog/process.h"
 #include "filesys/filesys.h"
 #include "filesys/file.h"
+#include "devices/input.h"
+
 
 static void syscall_handler (struct intr_frame *);
 static int wait_handler (int pid);
@@ -112,6 +114,7 @@ syscall_handler (struct intr_frame *f UNUSED)
       int fd = *(int*) translate_uvaddr(esp + 1);
       unsigned position = *(unsigned*) translate_uvaddr(esp + 2);
       seek_handler(fd, position);
+      return;
 
     }
     case SYS_TELL:{
@@ -120,9 +123,9 @@ syscall_handler (struct intr_frame *f UNUSED)
       f->eax = position;
       return;
     }
-    case SYS_WRITE:{
+    // case SYS_WRITE:{
       
-    }
+    // }
     default:
       NOT_REACHED();
   }
@@ -225,7 +228,7 @@ remove_handler(char *file_name){
   if (!validate_string(file_name)) {
     return false;
   }
-  struct thread *cur = thread_current();
+  // struct thread *cur = thread_current();
 
 //TODO: needs to ensure standard unix semantics for file removal when its open
   bool status = filesys_remove(file_name);
