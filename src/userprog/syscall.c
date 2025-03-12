@@ -13,6 +13,7 @@
 #include "filesys/filesys.h"
 #include "filesys/file.h"
 #include "devices/input.h"
+#include "lib/kernel/stdio.h"
 
 
 static void syscall_handler (struct intr_frame *);
@@ -31,7 +32,7 @@ static int filesize_handler(int fd);
 static int read_handler(int fd, void *buffer, unsigned length);
 static void seek_handler(int fd, unsigned position);
 static unsigned tell_handler(int fd);
-static struct lock filesys_lock;
+static struct lock filesys_lock; // filesys code is a critical section
 
 
 void
@@ -123,12 +124,55 @@ syscall_handler (struct intr_frame *f UNUSED)
       f->eax = position;
       return;
     }
-    // case SYS_WRITE:{
-      
-    // }
+    case SYS_WRITE: {
+      int fd = *(int*) translate_uvaddr(esp + 1);
+      const void *buffer = *(void**)(esp + 2);
+      unsigned length = *(unsigned*)(esp + 3);
+      int bytes_written = write_handler(fd, buffer, length);
+      f->eax = bytes_written;
+      return;
+    }
     default:
       NOT_REACHED();
   }
+}
+
+static bool
+validate_buffer (const void *buffer, unsigned length) {
+  char *buf = (char *) buffer;
+  for (unsigned i = 0; i < length; i += PGSIZE) {
+    translate_uvaddr(buf + i);
+  }
+  if (length % PGSIZE != 0) {
+    translate_uvaddr(buf + length - 1);
+  }
+}
+
+static int
+write_handler (int fd, const void *buffer, unsigned length) {
+  validate_buffer(buffer, length);
+  
+  if (fd == 0) {
+    return -1;
+  }
+  
+  if (fd == 1) {
+    putbuf(buffer, length);
+    return length;
+  }
+
+  struct thread *cur = thread_current();
+
+  struct file *file = cur->fd_table[fd];
+  if (file == NULL) {
+    return -1;
+  }
+
+  lock_acquire(&filesys_lock);
+  int bytes_written = file_write(file, buffer, length);
+  lock_release(&filesys_lock);
+  
+  return (bytes_written >= 0) ? bytes_written : -1;
 }
 
 static int
@@ -144,7 +188,9 @@ close_handler (int fd)
     return -1;
   }
 
+  lock_acquire(&filesys_lock);
   file_close(file);
+  lock_release(&filesys_lock);
   cur->fd_table[fd] = NULL;
   return 0;
 }
@@ -156,7 +202,11 @@ open_handler (char *file_name)
   if (!validate_string(file_name)) {
     return -1;
   }
+
+  lock_acquire(&filesys_lock);
   struct file *file = filesys_open(file_name);
+  lock_release(&filesys_lock);
+
   if (file == NULL) {
     return -1;
   }
@@ -168,7 +218,9 @@ open_handler (char *file_name)
       return fd;
     }
   }
+  lock_acquire(&filesys_lock);
   file_close(file);
+  lock_release(&filesys_lock);
   return -1;
 }
 
@@ -185,7 +237,9 @@ create_handler (char *file_name, unsigned initial_size)
   if (!validate_string(file_name)) {
     return false;
   }
+  lock_acquire(&filesys_lock);
   bool status = filesys_create(file_name, initial_size);
+  lock_release(&filesys_lock);
   return status;
 }
 
@@ -246,7 +300,11 @@ filesize_handler(int fd){
     return -1;
   }
 
-  return file_length(file);
+  lock_acquire(&filesys_lock);
+  int length = file_length(file);
+  lock_release(&filesys_lock);
+
+  return length;
 }
 
 
@@ -278,6 +336,7 @@ read_handler(int fd, void *buffer, unsigned length){
 
   return (bytes_read >= 0) ? bytes_read : -1; 
 }
+
 static void
 seek_handler(int fd, unsigned position){
   struct thread *cur = thread_current();
@@ -304,7 +363,8 @@ tell_handler(int fd){
 }
 
 
-static bool validate_string(const char *str) {
+static bool 
+validate_string(const char *str) {
   if (str == NULL) {
     return false;
   }
