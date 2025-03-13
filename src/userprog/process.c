@@ -22,6 +22,9 @@
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 #include "threads/malloc.h"
+#include "threads/synch.h"
+
+extern struct lock filesys_lock;
 
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
@@ -252,12 +255,14 @@ process_exit (void)
       pagedir_destroy (pdir);
     }
 
+  lock_acquire(&filesys_lock);
   for (unsigned fd = 2; fd < FILE_TABLE_SIZE; fd++) {
     if (cur->fd_table[fd] != NULL) {
       file_close(cur->fd_table[fd]);
       cur->fd_table[fd] = NULL;
     }
   }
+  lock_release(&filesys_lock);
 
   struct process_descriptor *procdesc = cur->procdesc;
   ASSERT (procdesc != NULL);
@@ -419,6 +424,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
   process_activate ();
 
   /* Open executable file. */
+  lock_acquire(&filesys_lock);
   file = filesys_open (program_name);
   if (file == NULL) 
     {
@@ -511,6 +517,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
   /* We arrive here whether the load is successful or not. */
   palloc_free_page(fn_copy);
   file_close (file);
+  lock_release(&filesys_lock);
   return success;
 }
 

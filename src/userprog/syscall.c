@@ -34,7 +34,7 @@ static unsigned tell_handler(int fd);
 static int write_handler (int fd, const void *buffer, unsigned length);
 static bool validate_buffer (const void *buffer, unsigned length);
 
-static struct lock filesys_lock; // filesys code is a critical section
+struct lock filesys_lock; // filesys code is a critical section
 
 
 void
@@ -273,6 +273,7 @@ write_handler (int fd, const void *user_buffer, unsigned length) {
   
   // Loop 3: Before stdout handling
   // for(;;);
+  size_t page_count = (length + PGSIZE - 1) / PGSIZE;
 
   if (fd == 1) {
     void *kernel_buffer = kernel_buffer_copy(user_buffer, length);
@@ -289,7 +290,7 @@ write_handler (int fd, const void *user_buffer, unsigned length) {
 
     putbuf(kernel_buffer, length);
     // putbuf(safe_buffer, length);
-    palloc_free_page(kernel_buffer);
+    palloc_free_multiple(kernel_buffer, page_count);
     return length;
   }
 
@@ -315,7 +316,7 @@ write_handler (int fd, const void *user_buffer, unsigned length) {
   int bytes_written = file_write(file, kernel_buffer, length);
   lock_release(&filesys_lock);
   
-  palloc_free_page(kernel_buffer);
+  palloc_free_multiple(kernel_buffer, page_count);
   return (bytes_written >= 0) ? bytes_written : -1;
 }
 
@@ -409,10 +410,10 @@ remove_handler(char *file_name){
     exit_handler(-1);  // Terminate the process
     NOT_REACHED();
   }
-  // struct thread *cur = thread_current();
 
-//TODO: needs to ensure standard unix semantics for file removal when its open
+  lock_acquire(&filesys_lock);
   bool status = filesys_remove(file_name);
+  lock_release(&filesys_lock);
   return status;
 }
 
@@ -446,10 +447,12 @@ read_handler(int fd, void *user_buffer, unsigned length) {
     NOT_REACHED();
   }
 
+  size_t page_count = (length + PGSIZE - 1) / PGSIZE;
+
   struct thread *cur = thread_current();
   if (fd == 0) {
     // read from stdin
-    void *kernel_buffer = palloc_get_page(0);
+    void *kernel_buffer = palloc_get_multiple(0, page_count);
     if (kernel_buffer == NULL) {
       return -1;
     }
@@ -460,12 +463,12 @@ read_handler(int fd, void *user_buffer, unsigned length) {
 
     for (unsigned j = 0; j < i; j++) {
       if (!put_user((uint8_t*) user_buffer + j, ((uint8_t*) kernel_buffer)[j])) {
-        palloc_free_page(kernel_buffer);
+        palloc_free_multiple(kernel_buffer, page_count);
         return -1;
       }
     }
 
-    palloc_free_page(kernel_buffer);
+    palloc_free_multiple(kernel_buffer, page_count);
     return i;
   }
 
@@ -479,7 +482,8 @@ read_handler(int fd, void *user_buffer, unsigned length) {
     return -1;
   }
 
-  void *kernel_buffer = palloc_get_page(0);
+  
+  void *kernel_buffer = palloc_get_multiple(0, page_count);
   if (kernel_buffer == NULL) {
     return -1;
   }
@@ -491,13 +495,13 @@ read_handler(int fd, void *user_buffer, unsigned length) {
   if (bytes_read > 0) {
     for (int i = 0; i < bytes_read; i++) {
       if (!put_user((uint8_t*) user_buffer + i, ((uint8_t*) kernel_buffer)[i])) {
-        palloc_free_page(kernel_buffer);
+        palloc_free_multiple(kernel_buffer, page_count);
         return -1;
       }
     }
   }
 
-  palloc_free_page(kernel_buffer);
+  palloc_free_multiple(kernel_buffer, page_count);
   return (bytes_read >= 0) ? bytes_read : -1; 
 }
 
