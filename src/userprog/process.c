@@ -127,7 +127,6 @@ start_process (void *aux)
 {
   struct process_info *pi = (struct process_info*)aux;
   struct thread *cur = thread_current();
-  
   char *file_name = pi->file_name;
   struct process_descriptor *pd = pi->procdesc;
   pd->tid = cur->tid;
@@ -138,7 +137,9 @@ start_process (void *aux)
   list_init(&pd->children);
   pd->ref_count = 2;
   lock_init(&pd->ref_lock);
+  
   cur->procdesc = pd;
+  cur->executable = NULL;
   
   struct intr_frame if_;
   bool success;
@@ -237,6 +238,14 @@ process_exit (void)
 {
   struct thread *cur = thread_current ();
   uint32_t *pdir;
+
+  if (cur->executable != NULL) {
+    lock_acquire(&filesys_lock);
+    file_allow_write(cur->executable);
+    file_close(cur->executable);
+    lock_release(&filesys_lock);
+    cur->executable = NULL;
+  }
 
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
@@ -432,6 +441,10 @@ load (const char *file_name, void (**eip) (void), void **esp)
       goto done; 
     }
 
+  // deny writes while executable is running
+  file_deny_write(file);
+  t->executable = file;
+
   /* Read and verify executable header. */
   if (file_read (file, &ehdr, sizeof ehdr) != sizeof ehdr
       || memcmp (ehdr.e_ident, "\177ELF\1\1\1", 7)
@@ -516,7 +529,6 @@ load (const char *file_name, void (**eip) (void), void **esp)
  done:
   /* We arrive here whether the load is successful or not. */
   palloc_free_page(fn_copy);
-  file_close (file);
   lock_release(&filesys_lock);
   return success;
 }
