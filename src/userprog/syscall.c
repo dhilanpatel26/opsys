@@ -15,7 +15,7 @@
 #include "devices/input.h"
 #include "lib/kernel/stdio.h"
 #include "threads/palloc.h"
-
+#include "devices/shutdown.h"
 
 static void syscall_handler (struct intr_frame *);
 static int wait_handler (int pid);
@@ -149,6 +149,11 @@ syscall_handler (struct intr_frame *f)
       translate_uvaddr((void*)((char*)esp + 15));
       int bytes_written = write_handler(fd, buffer, length);
       f->eax = bytes_written;
+      return;
+    }
+    case SYS_HALT: {
+      shutdown_power_off();
+      NOT_REACHED();
       return;
     }
     default:
