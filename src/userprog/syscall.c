@@ -48,35 +48,38 @@ syscall_init (void)
 static void
 syscall_handler (struct intr_frame *f) 
 {  
-  // printf("syscall handler\n");
   // relevant stack data is 4 bytes and aligned
   int *esp = f->esp; // user virtual memory
 
   int syscall_number = *(int*) translate_uvaddr(esp);
-  // printf("syscall: %d\n", syscall_number);
-
+  translate_uvaddr((void*)((char*)esp + 3)); // ensure entire syscall number is valid
 
   switch (syscall_number) {
     case SYS_WAIT: {
       int pid = *(int*) translate_uvaddr(esp + 1);
+      translate_uvaddr((void*)((char*)esp + 7));
       int status = wait_handler(pid);
       f->eax = status;
       return;
     }
     case SYS_EXIT: {
       int status = *(int*) translate_uvaddr(esp + 1);
+      translate_uvaddr((void*)((char*)esp + 7));
       exit_handler(status);
       NOT_REACHED();
     }
     case SYS_CREATE: {
       char *file_name = *(char**) translate_uvaddr(esp + 1);
+      translate_uvaddr((void*)((char*)esp + 7));
       unsigned initial_size = *(unsigned*) translate_uvaddr(esp + 2);
+      translate_uvaddr((void*)((char*)esp + 11));
       bool status = create_handler(file_name, initial_size);
       f->eax = status;
       return;
     }
     case SYS_EXEC: {
       char *file_name = *(char**) translate_uvaddr(esp + 1);
+      translate_uvaddr((void*)((char*)esp + 7));
       tid_t id = exec_handler(file_name);
       f->eax = id;
       
@@ -84,23 +87,27 @@ syscall_handler (struct intr_frame *f)
     }
     case SYS_OPEN: {
       char *file_name = *(char**) translate_uvaddr(esp + 1);
+      translate_uvaddr((void*)((char*)esp + 7));
       int fd = open_handler(file_name);
       f->eax = fd;
       return;
     }
     case SYS_CLOSE: {
       int fd = *(int*) translate_uvaddr(esp + 1);
+      translate_uvaddr((void*)((char*)esp + 7));
       close_handler(fd);
       return;
     }
     case SYS_REMOVE:{
       char *file_name = *(char**) translate_uvaddr(esp + 1);
+      translate_uvaddr((void*)((char*)esp + 7));
       bool status = remove_handler(file_name);
       f->eax = status; 
       return;
     }
     case SYS_FILESIZE:{
       int fd = *(int*) translate_uvaddr(esp + 1);
+      translate_uvaddr((void*)((char*)esp + 7));
       int size = filesize_handler(fd);
       f->eax = size;
       return;
@@ -108,29 +115,38 @@ syscall_handler (struct intr_frame *f)
     }
     case SYS_READ:{
       int fd = *(int*) translate_uvaddr(esp + 1);
+      translate_uvaddr((void*)((char*)esp + 7));
       void *buffer = *(void**) translate_uvaddr(esp + 2);
+      translate_uvaddr((void*)((char*)esp + 11));
       unsigned length = *(unsigned*) translate_uvaddr(esp + 3);
+      translate_uvaddr((void*)((char*)esp + 15));
       int bytes_read = read_handler(fd, buffer, length);
       f->eax = bytes_read;
       return;
     }
     case SYS_SEEK:{
       int fd = *(int*) translate_uvaddr(esp + 1);
+      translate_uvaddr((void*)((char*)esp + 7));
       unsigned position = *(unsigned*) translate_uvaddr(esp + 2);
+      translate_uvaddr((void*)((char*)esp + 11));
       seek_handler(fd, position);
       return;
 
     }
     case SYS_TELL:{
       int fd = *(int*) translate_uvaddr(esp + 1);
+      translate_uvaddr((void*)((char*)esp + 7));
       unsigned position = tell_handler(fd);
       f->eax = position;
       return;
     }
     case SYS_WRITE: {
       int fd = *(int*) translate_uvaddr(esp + 1);
+      translate_uvaddr((void*)((char*)esp + 7));
       const void *buffer = *(void**) translate_uvaddr(esp + 2);
+      translate_uvaddr((void*)((char*)esp + 11));
       unsigned length = *(unsigned*) translate_uvaddr(esp + 3);
+      translate_uvaddr((void*)((char*)esp + 15));
       int bytes_written = write_handler(fd, buffer, length);
       f->eax = bytes_written;
       return;
