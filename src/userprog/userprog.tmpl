@@ -53,14 +53,81 @@ Katherine Forbes <kforbes6@jhu.edu>
 >> `struct' member, global or static variable, `typedef', or
 >> enumeration.  Identify the purpose of each in 25 words or less.
 
+Below is the new/changed variables:
+struct lock filesys_lock; 
+struct process_info {
+  char *file_name;
+  struct process_descriptor *procdesc;
+  struct semaphore load_sema; 
+  struct semaphore add_sema; 
+  bool load_success;
+};
+struct process_descriptor {
+  tid_t tid; 
+  int exit_status;
+  bool exited; 
+  struct semaphore wait_sema; 
+  bool waited_on; 
+  struct list_elem elem;
+  struct list children; 
+  int ref_count;
+  struct lock ref_lock;
+};
+
+Below is the explaination for each new variable:
+filesys_lock is a global lock to ensure exclusive file system operations since any code operation with file is critical session. 
+process_info is a short-lived struct that exists mainly to coordinate process creation 
+file_name is the name of the executable to load.
+procdesc points to the newly created process’s descriptor.
+load_sema synchronizes the load process.
+add_sema ensures child is listed before exiting.
+load_success indicates if the child loaded successfully.
+process_descriptor is a longer-lived struct that tracks essential state for each user process (thread)
+tid is the thread identifier for single-threaded process.
+exit_status signals final exit code of the process.
+exited marks if the process has completed.
+wait_sema allows parent to wait for child termination.
+waited_on is a flags that wait() was already invoked once by the parent.
+elem embeds this descriptor into the parent’s children list.
+children holds descriptors of child processes spawned by this process.
+ref_count prevents premature deallocation (parent + self)
+ref_lock synchronizes changes to ref_count, avoiding race conditions.
+/* New or Changed Struct: process_descriptor */
+
+
+
+
 >> B2: Describe how file descriptors are associated with open files.
 >> Are file descriptors unique within the entire OS or just within a
 >> single process?
+
+In our Pintos setup, each process
+keeps its own table of open files, with indices serving as 
+the file descriptors (for exmaple 0 = STDIN, 1 = STDOUT, and so on). That means file 
+descriptors are only unique within a single process: two different processes
+can both use the same numeric file descriptor (e.g., fd == 2), but be 
+referring to different open files because they have entirely separate file
+descriptor tables.
 
 ---- ALGORITHMS ----
 
 >> B3: Describe your code for reading and writing user data from the
 >> kernel.
+
+For reading user data, first we will read and validate the reading target 
+and amount of data we want to read from the argument (it could either 
+be keyboard or a specific file). If reading from stdin, we read bytes 
+with input_getc() into a kernel buffer. If just reading from a regular
+file, we lock the file system, call file_read() into a kernel buffer, 
+then unlock. Lastly for both methods, we put kernel buffer data to user space.
+
+
+For writing the user data, we also validate all the user-input arguments (buffer
+length, and file descriptor etc). After that, we write byte-to-byte to the 
+kernel buffer. If user chooses to output to stdout, we call putbuf to print.
+Otherwise, we lock, call file_write() to write to user-indicated file 
+and unlock the file. 
+
 
 >> B4: Suppose a system call causes a full page (4,096 bytes) of data
 >> to be copied from user space into the kernel.  What is the least
