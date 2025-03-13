@@ -109,7 +109,6 @@ process_execute (const char *file_name)
 
   if (!pi->load_success) {
     sema_up(&pi->add_sema);
-    free(childpd);
     return TID_ERROR;
   }
   list_push_back(&thread_current()->procdesc->children, &childpd->elem);
@@ -158,8 +157,10 @@ start_process (void *aux)
   free(pi);
 
   /* If load failed, quit. */
-  if (!success) 
+  if (!success) {
+    pd->exited = true;
     thread_exit ();
+  }
 
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
@@ -263,9 +264,10 @@ process_exit (void)
 
   // TODO: may have to omit args, depending on how
   // file_name was processed in process_execute
-  printf("%s: exit(%d)\n", thread_name(), procdesc->exit_status);
-
-  procdesc->exited = true;
+  if (!procdesc->exited) {
+    printf("%s: exit(%d)\n", thread_name(), procdesc->exit_status);
+    procdesc->exited = true;
+  }
 
   sema_up(&procdesc->wait_sema);
 

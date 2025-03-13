@@ -383,25 +383,6 @@ exec_handler(char *file_name){
   if (tid == TID_ERROR) {
     return -1;
   }
-  // Find the child process descriptor (ensure synchronization)
-  struct thread *cur = thread_current();
-  struct process_descriptor *childpd = NULL;
-  struct list_elem *e;
-
-  for (e = list_begin(&cur->procdesc->children); 
-       e != list_end(&cur->procdesc->children); 
-       e = list_next(e)) {
-    childpd = list_entry(e, struct process_descriptor, elem);
-    if (childpd->tid == tid) {
-      break;
-    } else {
-      childpd = NULL;
-    }
-  }
-
-  if (childpd == NULL) {
-    return -1;
-  }
   
   return tid;
 }
@@ -536,6 +517,9 @@ validate_string(const char *str) {
     return false;
   }
   for (;; str++) {
+    if (!is_user_vaddr(str)) {
+      return false; // invalid memory access, segfault
+    }
     int c = get_user((uint8_t*) str);
     if (c == -1) {
       return false; // invalid memory access, segfault
