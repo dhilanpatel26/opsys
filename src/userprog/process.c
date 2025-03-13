@@ -197,10 +197,9 @@ process_wait (tid_t child_tid)
     if (childpd->tid == child_tid) {
       if (childpd->waited_on) {
         return -1;
-      } else {
-        childpd->waited_on = true;
-        break;
-      }
+      } 
+      childpd->waited_on = true;
+      break;
     } else {
       childpd = NULL;
     }
@@ -215,9 +214,8 @@ process_wait (tid_t child_tid)
 
   // for debugging
   ASSERT (childpd->exited);
-
   int status = childpd->exit_status;
-
+  list_remove(&childpd->elem); 
   lock_acquire(&childpd->ref_lock);
   childpd->ref_count--;
   bool should_free = (childpd->ref_count == 0);
@@ -226,9 +224,7 @@ process_wait (tid_t child_tid)
   if (should_free) {
     free(childpd);
   }
-
   return status;
-
 }
 
 /* Free the current process's resources. */
