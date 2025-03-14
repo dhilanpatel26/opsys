@@ -159,6 +159,13 @@ and unlock the file.
 >> fails, so it cannot return before the new executable has completed
 >> loading.  How does your code ensure this?  How is the load
 >> success/failure status passed back to the thread that calls "exec"?
+Our code ensures that the parent process cannot return from the system call 
+before the child executable finishes loading with the load_sema semaphore 
+found in the aux process_info struct. The child process increments the semaphore 
+after it loads and attempts to decrement a semaphore before returning, which 
+the parent process will increment after it checks the load_success boolean. The 
+success/failure status is passed back to the parent through the aux struct 
+used in thread_create, process_info.
 
 >> B8: Consider parent process P with child process C.  How do you
 >> ensure proper synchronization and avoid race conditions when P
@@ -166,17 +173,46 @@ and unlock the file.
 >> that all resources are freed in each case?  How about when P
 >> terminates without waiting, before C exits?  After C exits?  Are
 >> there any special cases?
+We ensure proper synchronization when P calls wait(C) with the wait_sema 
+semaphore initialized to 0. C increments the semaphore right before it exits. 
+If wait is called before C exits, the parent will block until C does exit. If 
+wait is called after C exits, the semaphore will have a value of 1, and the 
+parent will simply pass through. We ensure that resources are freed exactly once 
+right before they go out of scope by keeping a reference count ref_count in the 
+child process descriptor, initalized to 2. When a process exits, it will decrement 
+ref_count, and free the resources if the count becomes 0. The process will also 
+decrement the ref_count of all its children since it will never call wait. If 
+P terminates without waiting before C, then C will decrement its ref_count to 0 
+upon exit and free its process descriptor. If P terminates without waiting after C 
+exits, then P will decrement C's ref_count to 0 in cleanup and free C's process 
+descriptor. This covers all the cases of wait/exit in parent/child relationships.
 
 ---- RATIONALE ----
 
 >> B9: Why did you choose to implement access to user memory from the
 >> kernel in the way that you did?
+We chose to implement access to user memory through inline assembly from the kernel 
+as described in the assignment document. This method allowed for safe reading and 
+writing from bytes in a user space buffer with graceful handling of page faults. In 
+addition to this, we also defined functions validate_string, validate_buffer, 
+translate_uvaddr, and kernel_buffer_copy to cleanly verify that all data provided on 
+the stack as arguments were in user memory and mapped to physical pages. The advantage 
+of these methods allowed for comprehensive checking in a modular fashion. 
 
 >> B10: What advantages or disadvantages can you see to your design
 >> for file descriptors?
+Our file descriptor tables comes at a pre-defined size mapping the file descriptor 
+index to the file pointer. The advantage of this strategy is simple and efficient array 
+lookups, in addition to process isolation since each process has its own table. A clear 
+disadvantage to this, however, is that the table is fixed-capacity, and requires a linear-
+time insertion to avoid external fragmentation in the array. There is also no file descriptor 
+inheritance when a process calls fork, which should be supported in an operating system.
 
 >> B11: The default tid_t to pid_t mapping is the identity mapping.
 >> If you changed it, what advantages are there to your approach?
+We did not change it, since Pintos has a single-threaded design. This means that every thread, 
+except for the initial thread that was created before user process bootstrapping, has a one-to-one 
+association with a process. 
 
 			   SURVEY QUESTIONS
 			   ================
