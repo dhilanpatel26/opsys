@@ -75,10 +75,11 @@ struct process_descriptor {
 };
 
 Below is the explaination for each new variable:
+
 filesys_lock is a global lock to ensure exclusive file system operations since any code operation with file is critical session. 
 process_info is a short-lived struct that exists mainly to coordinate process creation 
 file_name is the name of the executable to load.
-procdesc points to the newly created process’s descriptor.
+procdesc points to the newly created process's descriptor.
 load_sema synchronizes the load process.
 add_sema ensures child is listed before exiting.
 load_success indicates if the child loaded successfully.
@@ -88,12 +89,10 @@ exit_status signals final exit code of the process.
 exited marks if the process has completed.
 wait_sema allows parent to wait for child termination.
 waited_on is a flags that wait() was already invoked once by the parent.
-elem embeds this descriptor into the parent’s children list.
+elem embeds this descriptor into the parent's children list.
 children holds descriptors of child processes spawned by this process.
 ref_count prevents premature deallocation (parent + self)
 ref_lock synchronizes changes to ref_count, avoiding race conditions.
-/* New or Changed Struct: process_descriptor */
-
 
 
 
@@ -101,28 +100,28 @@ ref_lock synchronizes changes to ref_count, avoiding race conditions.
 >> Are file descriptors unique within the entire OS or just within a
 >> single process?
 
-In our Pintos setup, each process
-keeps its own table of open files, with indices serving as 
-the file descriptors (for exmaple 0 = STDIN, 1 = STDOUT, and so on). That means file 
-descriptors are only unique within a single process: two different processes
-can both use the same numeric file descriptor (e.g., fd == 2), but be 
-referring to different open files because they have entirely separate file
-descriptor tables.
+In our Pintos setup, each process keeps its own table of open files, 
+with indices serving as the file descriptors (for exmaple 0 = STDIN, 1 = STDOUT,
+and so on). That means file descriptors are only unique within a single process:
+two different processes can both use the same numeric file descriptor 
+(e.g., fd == 2), but be referring to different open files because they 
+have entirely separate file descriptor tables.
 
 ---- ALGORITHMS ----
 
 >> B3: Describe your code for reading and writing user data from the
 >> kernel.
 
-For reading user data, first we will read and validate the reading target 
+For reading user data, first we read-in and validate the reading target 
 and amount of data we want to read from the argument (it could either 
 be keyboard or a specific file). If reading from stdin, we read bytes 
 with input_getc() into a kernel buffer. If just reading from a regular
 file, we lock the file system, call file_read() into a kernel buffer, 
-then unlock. Lastly for both methods, we put kernel buffer data to user space.
+then unlock (making sure that the current process is the only one have access to this file).
+Lastly for both methods, we put kernel buffer data to user space.
 
 
-For writing the user data, we also validate all the user-input arguments (buffer
+For writing the user data, similarly, we read and validate all the user-input arguments (buffer
 length, and file descriptor etc). After that, we write byte-to-byte to the 
 kernel buffer. If user chooses to output to stdout, we call putbuf to print.
 Otherwise, we lock, call file_write() to write to user-indicated file 
@@ -136,8 +135,31 @@ and unlock the file.
 >> for a system call that only copies 2 bytes of data?  Is there room
 >> for improvement in these numbers, and how much?
 
+Right now page table is looked up for every byte that is copied from
+the user space to the kernel. This means that for a full page of data,
+the greatest and least number of lookups both equals to 4,096 (one per byte if each
+get_user() call re-checks the page). 
+
+For the second scenario (Copying 2 bytes): the greatest and the least number of page‐table
+inspections is 2 (one per byte), same logic as the first scenario.
+
+Room for Improvement:
+Currently, the code calls pagedir_get_page() via get_user() for every byte, 
+which can multiply overhead. By caching a page translation or doing a single 
+page walk when bytes reside within a single page, you can reduce calls from 
+4,096 to just 1 (a 4,096× improvement) for a full page. 
+
+
 >> B5: Briefly describe your implementation of the "wait" system call
 >> and how it interacts with process termination.
+
+The "wait" system call allows a parent process to wait for a specified
+child to terminate and retrieve its exit status. It verifies if the given 
+PID belongs to a child, prevents multiple waits on the same process, and 
+blocks the parent using a semaphore until the child exits. Upon termination, 
+the child signals the parent, ensuring proper synchronization. The parent 
+then retrieves the child's exit status, removes it from its process list, 
+and frees resources, preventing zombie processes and ensuring orderly cleanup.
 
 >> B6: Any access to user program memory at a user-specified address
 >> can fail due to a bad pointer value.  Such accesses must cause the
@@ -152,6 +174,37 @@ and unlock the file.
 >> allocated resources (locks, buffers, etc.) are freed?  In a few
 >> paragraphs, describe the strategy or strategies you adopted for
 >> managing these issues.  Give an example.
+
+
+To handle user memory access failures gracefully while keeping the
+primary function of system call code clear, our group's implementation centralizes 
+pointer validation in helper functions like translate_uvaddr() and 
+validate_buffer(). These functions ensure that user pointers are within 
+valid memory regions before accessing them. If an invalid address is detected, 
+the process is immediately terminated using exit_handler(-1), preventing 
+further execution of faulty code.
+
+Rather than cluttering system call handlers with repetitive checks, we validate 
+pointers before using them, ensuring each argument is valid. For example, 
+in the syscall_handler(), each argument is accessed through translate_uvaddr(), 
+which ensures memory safety. This separation keeps system call logic concise 
+while maintaining robust error handling.
+
+To prevent resource leaks, we ensure that all dynamically allocated memory and 
+locks are released upon detecting an error. For instance, in the write_handler() 
+function, I first validate the buffer. If the buffer is invalid, the process 
+exits immediately before any memory allocation. If memory is allocated 
+(e.g., kernel_buffer_copy()), it is freed before returning an error. 
+Locks, such as filesys_lock, are always released before exiting a failing function, 
+ensuring system stability.
+
+In write_handler(), we first check if user_buffer is valid using validate_buffer(). 
+If invalid, exit_handler(-1) is called, terminating the process before proceeding. 
+If valid, we allocate a kernel copy of the buffer (kernel_buffer_copy()). If this 
+allocation fails, we return -1, avoiding unnecessary file operations. If writing 
+to a file, we acquire the file system lock, perform the operation, and then release 
+the lock before returning. This ensures all resources are properly handled, even in 
+case of an error.
 
 ---- SYNCHRONIZATION ----
 
