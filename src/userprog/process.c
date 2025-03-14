@@ -221,14 +221,8 @@ process_wait (tid_t child_tid)
   ASSERT (childpd->exited);
   int status = childpd->exit_status;
   list_remove(&childpd->elem); 
-  lock_acquire(&childpd->ref_lock);
-  childpd->ref_count--;
-  bool should_free = (childpd->ref_count == 0);
-  lock_release(&childpd->ref_lock);
+  free(childpd);
 
-  if (should_free) {
-    free(childpd);
-  }
   return status;
 }
 
