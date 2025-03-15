@@ -30,19 +30,50 @@ Katherine Forbes <kforbes6@jhu.edu>
 >> `struct' member, global or static variable, `typedef', or
 >> enumeration.  Identify the purpose of each in 25 words or less.
 
+N/a
+
 ---- ALGORITHMS ----
 
 >> A2: Briefly describe how you implemented argument parsing.  How do
 >> you arrange for the elements of argv[] to be in the right order?
 >> How do you avoid overflowing the stack page?
 
+First, when we load the file, we copy the command line and then tokenize it with strtok_r(). We store these tokens temporarily.
+Next, we grab the first token which is the name of the executable. We then set up the 
+stack, and use the setup_stack_args_helper() function to parse the rest of the tokens.
+The helper function pushes args onto the stack from right to left. This is important because C
+programs expect the arguments in this order on the stack, where the first argument
+is at an address higher up and the stack grows downwards. Then ,a NULL pointer is pushed to indicated
+the end of the list of arguments. Before pushing anything to the stack, we must calculate
+the total required space we need for the arguments, pointers, padding, etc. so the stack does
+not overflow. If the total size would overflow the page, then the load function fails.
+For this specific assignment, we only allowed up to 32 arguments (which should be enough for now).
+
 ---- RATIONALE ----
 
 >> A3: Why does Pintos implement strtok_r() but not strtok()?
 
+Because strtok_r() is "reentrant". This basically means that it can
+be used by multiple threads simultaneously, so it's thread-safe.
+It stores the current position in the string using a user-provided save_ptr pointer,
+whereas strtok() uses a static pointer. Having this user-provided pointer makes it safe for 
+concurrent use in a multi-threaded environment, and prevents undesired behavior that can happen
+using strtok().
+
+
+Source: 
+https://stackoverflow.com/questions/22210546/whats-the-difference-between-strtok-and-strtok-r-in-c
+https://www.geeksforgeeks.org/strtok-strtok_r-functions-c-examples/
+
 >> A4: In Pintos, the kernel separates commands into a executable name
 >> and arguments.  In Unix-like systems, the shell does this
 >> separation.  Identify at least two advantages of the Unix approach.
+
+1. more flexible, and the shell can handle more complex commands without changing kernel code to handle
+these complex cases. For example, the shell is built to handle pipeline commands, but you would
+need to add a lot of code to the kernel to handle this.
+2. More protected, as the shell is a separate process that can validate the user input
+and make sure it is safe to execute before passing it off to the kernel.
 
 			     SYSTEM CALLS
 			     ============

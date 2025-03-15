@@ -669,6 +669,18 @@ setup_stack_args_helper (void **esp, const char *file_name)
 
   }
 
+    total_size += 4 * (argc + 1);  // argv pointers + null sentinel
+    total_size += 4;               // argv
+    total_size += 4;               // argc
+    total_size += 4;               // return address
+    total_size += total_size % 4;  // alignment padding
+
+    // Check against page size
+    if (total_size > PGSIZE) {
+        palloc_free_page(fn_copy);
+        return false;
+    }
+
   // this aligns stack pointer
   *esp = (void*)((unsigned int)(*esp) & ~3);
 
