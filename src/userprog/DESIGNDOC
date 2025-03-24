@@ -176,9 +176,7 @@ inspections is 2 (one per byte), same logic as the first scenario.
 
 Room for Improvement:
 Currently, the code calls pagedir_get_page() via get_user() for every byte, 
-which can multiply overhead. By caching a page translation or doing a single 
-page walk when bytes reside within a single page, you can reduce calls from 
-4,096 to just 1 (a 4,096× improvement) for a full page. 
+which can multiply overhead. We can optimize it by doing at most two lookups. By caching a page translation or doing a single page walk when bytes reside within a single page, you can reduce calls from 4,096 to just 1 (if all 4096 bytes are on the same page), or 2 (if they span across two pages).
 
 
 >> B5: Briefly describe your implementation of the "wait" system call
