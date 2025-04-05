@@ -222,6 +222,9 @@ validate_buffer (const void *buffer, unsigned length) {
 
 static void *
 kernel_buffer_copy (const void *user_buffer, unsigned length) {
+
+  // follows method of only accessing through user page table
+
   if (length == 0) {
     return NULL;
   }
@@ -574,7 +577,10 @@ translate_uvaddr(void *uptr) {
     NOT_REACHED();
   }
 
-  return kptr;
+  // accesses the kernel virtual address
+  // special bits only get set in the kernel page table
+
+  return kptr; 
 }
 
 static void
