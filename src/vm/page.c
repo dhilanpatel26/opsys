@@ -1,0 +1,123 @@
+#include "vm/page.h"
+#include "vm/frame.h"
+#include "threads/malloc.h"
+#include "threads/thread.h"
+#include "filesys/file.h"
+#include <string.h>
+
+#ifdef USERPROG
+#include "userprog/pagedir.h"
+#endif
+
+/* Initialize a supplemental page table */
+void
+sup_page_table_init(struct hash *spt)
+{
+  hash_init(spt, sup_page_table_hash, sup_page_table_less, NULL);
+}
+
+/* Insert a page into the supplemental page table */
+bool
+sup_page_table_insert(struct hash *spt, struct sup_page_table_entry *spte)
+{
+  return hash_insert(spt, &spte->hash_elem) == NULL;
+}
+
+/* Look up a page in the supplemental page table */
+struct sup_page_table_entry *
+sup_page_table_lookup(struct hash *spt, void *vaddr)
+{
+  struct sup_page_table_entry spte;
+  struct hash_elem *e;
+  
+  /* We need to clear the offset bits to get the page address */
+  spte.vaddr = pg_round_down(vaddr);
+  e = hash_find(spt, &spte.hash_elem);
+  
+  return e != NULL ? hash_entry(e, struct sup_page_table_entry, hash_elem) : NULL;
+}
+
+/* Load a page according to its type */
+bool
+load_page(struct sup_page_table_entry *spte)
+{
+#ifdef USERPROG
+  /* Allocate a frame for the page */
+  void *kpage = frame_allocate(PAL_USER, spte);
+  if (kpage == NULL)
+    return false;
+
+  bool success = false;
+  
+  switch (spte->status)
+  {
+    case IN_MEMORY:
+      /* Already in memory, nothing to do */
+      success = true;
+      break;
+      
+    case IN_SWAP:
+      /* Load from swap */
+      swap_in(spte->swap_index, kpage);
+      success = true;
+      break;
+      
+    case IN_FILESYS:
+      /* Load from file */
+      if (spte->read_bytes > 0) {
+        file_seek(spte->file, spte->file_offset);
+        if (file_read(spte->file, kpage, spte->read_bytes) != (int) spte->read_bytes) {
+          frame_free(kpage);
+          return false;
+        }
+      }
+      
+      /* Zero the rest */
+      if (spte->zero_bytes > 0)
+        memset(kpage + spte->read_bytes, 0, spte->zero_bytes);
+        
+      success = true;
+      break;
+      
+    case NOT_LOADED:
+      /* Zero the page */
+      memset(kpage, 0, PGSIZE);
+      success = true;
+      break;
+  }
+  
+  /* If successful, add the page to the process's page table */
+  if (success && 
+      pagedir_get_page(thread_current()->pagedir, spte->vaddr) == NULL &&
+      pagedir_set_page(thread_current()->pagedir, spte->vaddr, kpage, spte->writable)) {
+    spte->status = IN_MEMORY;
+    frame_unpin(kpage);  /* Unpin the frame now that it's set up */
+    return true;
+  }
+  
+  /* If we get here, loading failed */
+  frame_free(kpage);
+#endif
+  return false;
+}
+
+/* Hash function for supplemental page table */
+unsigned 
+sup_page_table_hash(const struct hash_elem *e, void *aux UNUSED)
+{
+  const struct sup_page_table_entry *spte = 
+    hash_entry(e, struct sup_page_table_entry, hash_elem);
+  return hash_bytes(&spte->vaddr, sizeof spte->vaddr);
+}
+
+/* Comparison function for supplemental page table */
+bool
+sup_page_table_less(const struct hash_elem *a, const struct hash_elem *b, void *aux UNUSED)
+{
+  const struct sup_page_table_entry *sa = 
+    hash_entry(a, struct sup_page_table_entry, hash_elem);
+  const struct sup_page_table_entry *sb = 
+    hash_entry(b, struct sup_page_table_entry, hash_elem);
+    
+  return sa->vaddr < sb->vaddr;
+}
