@@ -14,12 +14,20 @@ enum page_status {
   NOT_LOADED    /* Page has not been loaded yet */
 };
 
+enum page_source {
+  SOURCE_FILE,
+  SOURCE_SWAP,
+  SOURCE_ZERO
+};
+
 /* Supplemental page table entry */
 struct sup_page_table_entry {
   void *vaddr;              /* User virtual address */
   bool writable;            /* True if writable */
   bool pinned;              /* True if page is pinned in memory */
   enum page_status status;  /* Current status of the page */
+  enum page_source source;  /* Original source of the page, never changes after initialization */
+  struct lock page_lock;    /* Lock for synchronizing access to the page across multiple processes */
 
 #ifdef USERPROG
   /* For pages in the swap */

@@ -24,10 +24,6 @@
 #include "threads/malloc.h"
 #include "threads/synch.h"
 
-#ifndef VM
-#define VM
-#endif
-
 #ifdef VM
 #include "vm/page.h"
 #endif
@@ -617,7 +613,7 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 
 #ifdef VM /* VM code, load pages lazily */
       /* Don't load page yet, just record in SPT with IN_FILESYS tag */
-      struct sup_page_table_entry *spte = malloc(sizeof(struct sup_page_table_entry));\
+      struct sup_page_table_entry *spte = malloc(sizeof(struct sup_page_table_entry));
       if (spte == NULL) {
         return false;
       }
@@ -629,6 +625,8 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
       spte->writable = writable;
       spte->pinned = false; // unpinned by default
       spte->status = IN_FILESYS; // where to look on page fault
+      spte->source = page_read_bytes == 0 ? SOURCE_ZERO : SOURCE_FILE;
+      lock_init(&spte->page_lock);
       spte->file = file_reopen(file); // new reference to the file
       spte->file_offset = ofs;
       spte->read_bytes = page_read_bytes;

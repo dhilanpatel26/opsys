@@ -23,6 +23,7 @@ sup_page_table_init(struct hash *spt)
 bool
 sup_page_table_insert(struct hash *spt, struct sup_page_table_entry *spte)
 {
+  lock_init(&spte->page_lock);
   return hash_insert(spt, &spte->hash_elem) == NULL;
 }
 
@@ -40,7 +41,8 @@ sup_page_table_lookup(struct hash *spt, void *vaddr)
   return e != NULL ? hash_entry(e, struct sup_page_table_entry, hash_elem) : NULL;
 }
 
-/* Load a page according to its type */
+/* Load a page according to its type. Called after a page fault where
+   the SPT entry exists and the access type is valid. */
 bool
 load_page(struct sup_page_table_entry *spte)
 {
@@ -59,27 +61,41 @@ load_page(struct sup_page_table_entry *spte)
       success = true;
       break;
       
-    case IN_SWAP:
+    case IN_SWAP: // TOOD: fully implement swap.c
       /* Load from swap */
       swap_in(spte->swap_index, kpage);
+      spte->status = IN_MEMORY;
+      /* Do NOT modify spte->source */
       success = true;
       break;
       
     case IN_FILESYS:
-      /* Load from file */
-      if (spte->read_bytes > 0) {
+      /* Read/write bytes already validated in lazy loading */
+
+      /* Handling demand paging from file */
+      if (spte->read_bytes == 0) {
+        /* All bytes to zero */
+        memset(kpage, 0, PGSIZE);
+        success = true;
+      } else {
+        /* Some to read, potentially some to zero */
+
+        /* Releases frame table lock during I/O for parallelism */
+        frame_pin(kpage);  /* Prevent eviction during I/O */
+        
+        /* File I/O occupied, does not need to hold locks */
         file_seek(spte->file, spte->file_offset);
         if (file_read(spte->file, kpage, spte->read_bytes) != (int) spte->read_bytes) {
           frame_free(kpage);
           return false;
         }
-      }
-      
-      /* Zero the rest */
-      if (spte->zero_bytes > 0)
-        memset(kpage + spte->read_bytes, 0, spte->zero_bytes);
+
+        /* Zero rest of page */
+        if (spte->zero_bytes > 0)
+          memset(kpage + spte->read_bytes, 0, spte->zero_bytes);
         
-      success = true;
+        success = true;
+      }
       break;
       
     case NOT_LOADED:

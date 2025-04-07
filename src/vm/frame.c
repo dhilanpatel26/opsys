@@ -69,7 +69,6 @@ frame_allocate(enum palloc_flags flags, struct sup_page_table_entry *spte)
   return kpage;
 }
 
-/* Eviction using clock algorithm (simplified) */
 static void *
 frame_evict(void) 
 {
@@ -77,41 +76,60 @@ frame_evict(void)
   static struct list_elem *clock_ptr = NULL;
   struct frame_entry *f;
   
-  /* Start from the current position or beginning of list */
-  if (clock_ptr == NULL || clock_ptr == list_end(&frame_list))
-    clock_ptr = list_begin(&frame_list);
-  
-  /* Loop through frames looking for one to evict */
+  /* Scan for a frame to evict */
   size_t iterations = 0;
   size_t num_frames = list_size(&frame_list);
   
   while (iterations < 2 * num_frames) {
+    /* Precondition: Must hold frame_table_lock while scanning (frame_allocate acquired) */
+    if (clock_ptr == NULL || clock_ptr == list_end(&frame_list))
+      clock_ptr = list_begin(&frame_list);
+      
     f = list_entry(clock_ptr, struct frame_entry, elem);
     clock_ptr = list_next(clock_ptr);
-    
-    if (clock_ptr == list_end(&frame_list))
-      clock_ptr = list_begin(&frame_list);
     
     /* Skip pinned frames */
     if (f->pinned)
       continue;
       
+    /* Try to acquire the page lock for this frame's SPT entry */
+    if (!lock_try_acquire(&f->spte->page_lock)) {
+      /* Skip if we can't get the lock without blocking */
+      iterations++;
+      continue;
+    }
+      
     /* Check accessed bit */
     if (pagedir_is_accessed(f->owner->pagedir, f->spte->vaddr)) {
       /* Give a second chance */
       pagedir_set_accessed(f->owner->pagedir, f->spte->vaddr, false);
+      lock_release(&f->spte->page_lock);
     } else {
-      /* Evict this frame */
+      /* Evict this frame - we hold both the frame table lock and the page lock */
       void *kpage = f->kpage;
       
       /* If dirty, write to swap */
       if (pagedir_is_dirty(f->owner->pagedir, f->spte->vaddr)) {
+        /* Temporarily release frame table lock during I/O for parallelism */
+        lock_release(&frame_table_lock);
+        
+        /* Do swap I/O while holding only the page lock */
         f->spte->swap_index = swap_out(kpage);
         f->spte->status = IN_SWAP;
+        
+        /* Reacquire frame table lock */
+        lock_acquire(&frame_table_lock);
+      } else if (f->spte->source == SOURCE_FILE) {
+        /* Clean page from file, just update status */
+        /* No need to write back to file */
+        f->spte->status = IN_FILESYS;
       }
       
       /* Remove mapping from page table */
       pagedir_clear_page(f->owner->pagedir, f->spte->vaddr);
+      
+      /* Update SPT and release page lock */
+      lock_release(&f->spte->page_lock);
       
       /* Remove from frame table */
       list_remove(&f->elem);

@@ -172,9 +172,23 @@ page_fault (struct intr_frame *f)
 
    /* If page exists in SPT and access type is valid */
    if (spte != NULL && !(write && !spte->writable)) {
-      /* Tries to obtain a frame, fetch data into it, and point PTE to it*/
-      if (load_page(spte)) {
-         return; /* Page fault handled successfully */
+      /* Lock this page during fault handling */
+      lock_acquire(&spte->page_lock);
+
+      /* Another process could have loaded the page while we blocked */
+      if (spte->status == IN_MEMORY) {
+         /* Page is already in memory, nothing to do */
+         lock_release(&spte->page_lock);
+         return;
+      }
+
+      /* Try to load page */
+      bool success = load_page(spte);
+      lock_release(&spte->page_lock); /* Release ASAP */
+
+      if (success) {
+         /* Page loaded successfully */
+         return;
       }
    }
 }
