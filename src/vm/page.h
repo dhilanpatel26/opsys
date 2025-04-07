@@ -5,6 +5,7 @@
 #include "vm/swap.h"
 #include "filesys/file.h"
 #include "threads/vaddr.h"
+#include "threads/synch.h"
 
 /* Types of pages in the supplemental page table */
 enum page_status {
