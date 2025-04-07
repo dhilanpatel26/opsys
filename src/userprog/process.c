@@ -24,6 +24,14 @@
 #include "threads/malloc.h"
 #include "threads/synch.h"
 
+#ifndef VM
+#define VM
+#endif
+
+#ifdef VM
+#include "vm/page.h"
+#endif
+
 extern struct lock filesys_lock;
 
 static thread_func start_process NO_RETURN;
@@ -607,6 +615,33 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
       size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
       size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
+#ifdef VM /* VM code, load pages lazily */
+      /* Don't load page yet, just record in SPT with IN_FILESYS tag */
+      struct sup_page_table_entry *spte = malloc(sizeof(struct sup_page_table_entry));\
+      if (spte == NULL) {
+        return false;
+      }
+
+      // TODO: Must be careful of synchronizing.
+
+      /* Set up SPT entry */
+      spte->vaddr = upage; // kernel virtual address
+      spte->writable = writable;
+      spte->pinned = false; // unpinned by default
+      spte->status = IN_FILESYS; // where to look on page fault
+      spte->file = file_reopen(file); // new reference to the file
+      spte->file_offset = ofs;
+      spte->read_bytes = page_read_bytes;
+      spte->zero_bytes = page_zero_bytes;
+
+      /* Insert into SPT */
+      if (!sup_page_table_insert(&thread_current()->spt, spte)) {
+        if (spte->file != NULL)
+          file_close(spte->file);
+        free(spte);
+        return false;
+      }
+#else /* Original code, allocate pages immediately */
       /* Get a page of memory. */
       uint8_t *kpage = palloc_get_page (PAL_USER);
       if (kpage == NULL)
@@ -626,6 +661,7 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
           palloc_free_page (kpage);
           return false; 
         }
+#endif
 
       /* Advance. */
       read_bytes -= page_read_bytes;

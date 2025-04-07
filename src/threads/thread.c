@@ -110,6 +110,11 @@ thread_init (void)
     list_init(&initial_pd.children);
     initial_thread->procdesc = &initial_pd;
   #endif
+
+  #ifdef VM
+    sup_page_table_init(&initial_thread->spt);
+  #endif
+
 }
 
 /* Starts preemptive thread scheduling by enabling interrupts.
@@ -296,6 +301,10 @@ thread_exit (void)
 
 #ifdef USERPROG
   process_exit ();
+#endif
+
+#ifdef VM
+  sup_page_table_destroy(&thread_current()->spt);
 #endif
 
   /* Remove thread from all threads list, set our status to dying,

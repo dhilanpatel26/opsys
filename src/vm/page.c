@@ -9,6 +9,8 @@
 #include "userprog/pagedir.h"
 #endif
 
+static void spt_entry_free(struct hash_elem *e, void *aux UNUSED);
+
 /* Initialize a supplemental page table */
 void
 sup_page_table_init(struct hash *spt)
@@ -16,7 +18,8 @@ sup_page_table_init(struct hash *spt)
   hash_init(spt, sup_page_table_hash, sup_page_table_less, NULL);
 }
 
-/* Insert a page into the supplemental page table */
+/* Insert a page into the supplemental page table.
+   Returns true on insert, false on no change (already in table) */
 bool
 sup_page_table_insert(struct hash *spt, struct sup_page_table_entry *spte)
 {
@@ -121,3 +124,31 @@ sup_page_table_less(const struct hash_elem *a, const struct hash_elem *b, void *
     
   return sa->vaddr < sb->vaddr;
 }
+
+/* Frees an SPT entry */
+static void
+spt_entry_free(struct hash_elem *e, void *aux UNUSED)
+{
+  struct sup_page_table_entry *spte = hash_entry(e, struct sup_page_table_entry, hash_elem);
+  
+#ifdef USERPROG
+  /* Close any open files */
+  if (spte->status == IN_FILESYS && spte->file != NULL)
+    file_close(spte->file);
+    
+  /* Free any swap slots */
+  if (spte->status == IN_SWAP)
+    swap_free(spte->swap_index);
+#endif
+
+  /* Free the entry itself */
+  free(spte);
+}
+
+void
+sup_page_table_destroy(struct hash *spt)
+{
+  hash_destroy(spt, spt_entry_free);
+}
+
+// do we need a spt_entry_free?

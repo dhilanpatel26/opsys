@@ -6,6 +6,10 @@
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 
+#ifdef VM
+#include "vm/page.h"
+#endif
+
 /* Number of page faults processed. */
 static long long page_fault_cnt;
 
@@ -149,12 +153,34 @@ page_fault (struct intr_frame *f)
   write = (f->error_code & PF_W) != 0;
   user = (f->error_code & PF_U) != 0;
 
-  // case one: handle kernel access to user memory
+  // case one: handle kernel access to user memory (e.g. during syscall)
   if (!user && fault_addr < PHYS_BASE && is_user_vaddr(fault_addr)) {
    f->eip = (void*) f->eax;
    f->eax = 0xffffffff;
    return;
   }
+
+#ifdef VM
+/* Is this a valid page fault that can be handled by VM system? */
+  if (not_present) {
+   /* Round down to get page address */
+   void *page_addr = pg_round_down(fault_addr);
+
+   /* Check if the page is in the supplemental page table */
+   struct sup_page_table_entry *spte = 
+      sup_page_table_lookup(&thread_current()->spt, page_addr);
+
+   /* If page exists in SPT and access type is valid */
+   if (spte != NULL && !(write && !spte->writable)) {
+      /* Tries to obtain a frame, fetch data into it, and point PTE to it*/
+      if (load_page(spte)) {
+         return; /* Page fault handled successfully */
+      }
+   }
+}
+#endif
+
+   /* Page fault could not be handled - terminate process */
 
   // case two: the user process is causing page fault
   if (user) {
@@ -171,16 +197,5 @@ page_fault (struct intr_frame *f)
   // case three: if we get here, then the kernel is accessing 
   // kernel memory improperly somehow
   PANIC ("Kernel page fault at %p", fault_addr);
-
-
-//   /* To implement virtual memory, delete the rest of the function
-//      body, and replace it with code that brings in the page to
-//      which fault_addr refers. */
-//   printf ("Page fault at %p: %s error %s page in %s context.\n",
-//           fault_addr,
-//           not_present ? "not present" : "rights violation",
-//           write ? "writing" : "reading",
-//           user ? "user" : "kernel");
-//   kill (f);
 }
 

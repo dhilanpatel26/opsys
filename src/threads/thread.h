@@ -6,6 +6,11 @@
 #include <stdint.h>
 #include "filesys/filesys.h"
 #include "filesys/file.h"
+#include "lib/kernel/hash.h"
+
+#ifdef VM
+#include "vm/page.h"
+#endif
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -103,6 +108,10 @@ struct thread
     struct process_descriptor *procdesc;      /* Process descriptor. */
     struct file *executable;              /* Executable file. */
     struct file *fd_table[FILE_TABLE_SIZE];   /* File descriptor table. */
+#endif
+
+#ifdef VM
+   struct hash spt;                   /* Supplemental page table. */
 #endif
 
     /* Owned by thread.c. */
