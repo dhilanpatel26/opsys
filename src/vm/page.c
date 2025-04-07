@@ -23,7 +23,6 @@ sup_page_table_init(struct hash *spt)
 bool
 sup_page_table_insert(struct hash *spt, struct sup_page_table_entry *spte)
 {
-  lock_init(&spte->page_lock);
   return hash_insert(spt, &spte->hash_elem) == NULL;
 }
 

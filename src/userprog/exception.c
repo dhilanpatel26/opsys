@@ -206,10 +206,10 @@ page_fault (struct intr_frame *f)
    
    thread_exit();
    NOT_REACHED();
+  } else {
+   // case three: if we get here, then the kernel is accessing 
+   // kernel memory improperly somehow
+   PANIC ("Kernel page fault at %p", fault_addr);
   }
-
-  // case three: if we get here, then the kernel is accessing 
-  // kernel memory improperly somehow
-  PANIC ("Kernel page fault at %p", fault_addr);
 }
 

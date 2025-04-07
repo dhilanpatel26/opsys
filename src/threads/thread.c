@@ -111,10 +111,6 @@ thread_init (void)
     initial_thread->procdesc = &initial_pd;
   #endif
 
-  #ifdef VM
-    sup_page_table_init(&initial_thread->spt);
-  #endif
-
 }
 
 /* Starts preemptive thread scheduling by enabling interrupts.
@@ -488,6 +484,13 @@ init_thread (struct thread *t, const char *name, int priority)
   #ifdef USERPROG
   for (int i = 0; i < FILE_TABLE_SIZE; i++) {
     t->fd_table[i] = NULL;
+  }
+  #endif
+
+  #ifdef VM
+  /* Initial thread was already taken care of in init.c */
+  if (t != initial_thread) {
+    sup_page_table_init(&t->spt);
   }
   #endif
 

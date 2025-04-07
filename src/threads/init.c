@@ -37,6 +37,11 @@
 #include "filesys/filesys.h"
 #include "filesys/fsutil.h"
 #endif
+#ifdef VM
+#include "vm/frame.h"
+#include "vm/swap.h"
+#include "vm/page.h"
+#endif
 
 /* Page directory with kernel mappings only. */
 uint32_t *init_page_dir;
@@ -96,6 +101,13 @@ pintos_init (void)
 
   /* Initialize memory system. */
   palloc_init (user_page_limit);
+  
+#ifdef VM
+  frame_table_init();
+  swap_init();
+  sup_page_table_init(&thread_current()->spt);
+#endif
+
   malloc_init ();
   paging_init ();
 

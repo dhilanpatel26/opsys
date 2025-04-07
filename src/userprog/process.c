@@ -778,7 +778,32 @@ setup_stack (void **esp, const char *file_name)
       success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
       if (success) {
         *esp = PHYS_BASE;
+
+#ifdef VM
+        struct sup_page_table_entry *spte = malloc(sizeof(struct sup_page_table_entry));
+        if (spte == NULL) {
+          palloc_free_page(kpage);
+          return false;
+        }
+
+        spte->vaddr = ((uint8_t *) PHYS_BASE) - PGSIZE;
+        spte->writable = true;
+        spte->pinned = true; // pinned until setup is complete
+        spte->status = IN_MEMORY;
+        spte->source = SOURCE_ZERO;
+        lock_init(&spte->page_lock);
+
+        if (!sup_page_table_insert(&thread_current()->spt, spte)) {
+          free(spte);
+          palloc_free_page(kpage);
+          return false;
+        }
+
         success = setup_stack_args_helper(esp, file_name);
+        spte->pinned = false; // unpin the frame now that it's set up
+#else
+        success = setup_stack_args_helper(esp, file_name);
+#endif
       }
       else
         palloc_free_page (kpage);
