@@ -2,6 +2,7 @@
 #include "threads/vaddr.h"
 #include "threads/synch.h"
 #include <bitmap.h>
+#include <stdio.h>
 
 // incomplete
 // TODO: finish
@@ -18,26 +19,39 @@ static struct bitmap *swap_bitmap;
 /* Lock for swap operations */
 static struct lock swap_lock;
 
+bool swap_available = false;
+
 /* Initialize the swap table */
 void
 swap_init(void)
 {
   swap_device = block_get_role(BLOCK_SWAP);
-  if (swap_device == NULL)
-    PANIC("No swap device found, VM system cannot work");
+  if (swap_device == NULL) {
+    printf("Warning: No swap device found\n");
+    swap_available = false;
+    return;
+  }
     
   swap_bitmap = bitmap_create(block_size(swap_device) / SECTORS_PER_PAGE);
-  if (swap_bitmap == NULL)
-    PANIC("Failed to create swap bitmap");
+  if (swap_bitmap == NULL) {
+    printf("Warning: Failed to create swap bitmap. VM operating with limited memory.\n");
+    swap_available = false;
+    return;
+  }
     
   bitmap_set_all(swap_bitmap, false);  /* All slots start free */
   lock_init(&swap_lock);
+  swap_available = true;
 }
 
 /* Write a page to swap space and return the swap index */
 swap_index_t
 swap_out(void *page)
 {
+  if (!swap_available) {
+    PANIC("Swap space is not available");
+  }
+
   lock_acquire(&swap_lock);
   
   /* Find a free swap slot */

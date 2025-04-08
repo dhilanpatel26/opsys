@@ -4,6 +4,7 @@
 #include "threads/thread.h"
 #include "filesys/file.h"
 #include <string.h>
+#include <stdio.h>
 
 #ifdef USERPROG
 #include "userprog/pagedir.h"
@@ -48,8 +49,10 @@ load_page(struct sup_page_table_entry *spte)
 #ifdef USERPROG
   /* Allocate a frame for the page */
   void *kpage = frame_allocate(PAL_USER, spte);
-  if (kpage == NULL)
+  if (kpage == NULL) {
+    printf("DEBUG: Failed to allocate frame for page %p\n", spte->vaddr);
     return false;
+  }
 
   bool success = false;
   
@@ -70,6 +73,8 @@ load_page(struct sup_page_table_entry *spte)
       
     case IN_FILESYS:
       /* Read/write bytes already validated in lazy loading */
+      printf("DEBUG: Loading page from file %p, offset %d, read_bytes %d\n",
+             spte->vaddr, spte->file_offset, spte->read_bytes);
 
       /* Handling demand paging from file */
       if (spte->read_bytes == 0) {
@@ -108,11 +113,13 @@ load_page(struct sup_page_table_entry *spte)
   if (success && 
       pagedir_get_page(thread_current()->pagedir, spte->vaddr) == NULL &&
       pagedir_set_page(thread_current()->pagedir, spte->vaddr, kpage, spte->writable)) {
+    printf("DEBUG: Page %p loaded successfully\n", spte->vaddr);
     spte->status = IN_MEMORY;
     frame_unpin(kpage);  /* Unpin the frame now that it's set up */
     return true;
   }
   
+  printf("DEBUG: Failed to load page %p\n", spte->vaddr);
   /* If we get here, loading failed */
   frame_free(kpage);
 #endif

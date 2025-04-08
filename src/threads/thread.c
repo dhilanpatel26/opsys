@@ -590,10 +590,13 @@ schedule (void)
   ASSERT (cur->status != THREAD_RUNNING);
   ASSERT (is_thread (next));
 
+  // FAULTING HERE
   if (cur != next)
     prev = switch_threads (cur, next);
   thread_schedule_tail (prev);
 }
+
+// *0x8049db2
 
 /* Returns a tid to use for a new thread. */
 static tid_t

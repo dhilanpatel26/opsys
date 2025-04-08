@@ -3,9 +3,13 @@
 #include "threads/malloc.h"
 #include "threads/synch.h"
 #include <list.h>
+#include <stdio.h>
 
 #ifdef USERPROG
 #include "userprog/pagedir.h"
+#endif
+
+#ifdef VM
 #include "vm/swap.h"
 #endif
 
@@ -20,6 +24,31 @@ frame_table_init(void)
 {
   list_init(&frame_list);
   lock_init(&frame_table_lock);
+}
+
+/* Finds the frame that contains the given kernel page */
+void *frame_lookup(void *vaddr) 
+{
+  printf("Frame lookup for vaddr: %p\n", vaddr);
+  struct list_elem *e;
+  struct frame_entry *f;
+  void *kpage = NULL;
+  
+  lock_acquire(&frame_table_lock);
+  
+  for (e = list_begin(&frame_list); e != list_end(&frame_list); e = list_next(e)) {
+    f = list_entry(e, struct frame_entry, elem);
+    // Debug print to see what's in the frame table
+    printf("Frame entry: kpage=%p, spte->vaddr=%p, looking for %p\n", 
+           f->kpage, f->spte->vaddr, vaddr);
+    if (f->spte != NULL && f->spte->vaddr == vaddr) {
+      kpage = f->kpage;
+      break;
+    }
+  }
+  
+  lock_release(&frame_table_lock);
+  return kpage;
 }
 
 /* Allocates a frame for the given page and returns the kernel virtual address.
@@ -109,7 +138,17 @@ frame_evict(void)
       void *kpage = f->kpage;
       
       /* If dirty, write to swap */
+
+      // this is through the user page directory, so we need to make sure 
+      // that the kernel always uses the user page directory to access the page.
+      // need to modify syscall accordingly (some translations right, some wrong).
       if (pagedir_is_dirty(f->owner->pagedir, f->spte->vaddr)) {
+        extern bool swap_available;
+        if (!swap_available) {
+          lock_release(&f->spte->page_lock);
+          continue; // Skip this frame, can't swap
+        }
+
         /* Temporarily release frame table lock during I/O for parallelism */
         lock_release(&frame_table_lock);
         
@@ -204,4 +243,34 @@ frame_free(void *kpage)
   }
   
   lock_release(&frame_table_lock);
+}
+
+/* Register an existing page with the frame system */
+void* 
+frame_register(void *kpage, struct sup_page_table_entry *spte)
+{
+  struct frame_entry *f;
+  
+  lock_acquire(&frame_table_lock);
+  
+  /* Create frame entry */
+  f = malloc(sizeof(struct frame_entry));
+  if (f == NULL) {
+    lock_release(&frame_table_lock);
+    return NULL;
+  }
+  
+  /* Set up frame entry */
+  f->kpage = kpage;
+  #ifdef USERPROG
+  f->owner = thread_current();
+  #endif
+  f->spte = spte;
+  f->pinned = true;  // Pinned by default???
+  
+  /* Add to frame table */
+  list_push_back(&frame_list, &f->elem);
+  
+  lock_release(&frame_table_lock);
+  return kpage;
 }

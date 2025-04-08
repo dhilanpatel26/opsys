@@ -26,6 +26,7 @@
 
 #ifdef VM
 #include "vm/page.h"
+#include "vm/frame.h"
 #endif
 
 extern struct lock filesys_lock;
@@ -170,6 +171,12 @@ start_process (void *aux)
     thread_exit ();
   }
 
+  #ifdef VM
+  void* f = frame_lookup(((uint8_t *) PHYS_BASE) - PGSIZE);
+  printf("DEBUG: f = %p\n", f);
+  frame_unpin(frame_lookup(((uint8_t *) PHYS_BASE) - PGSIZE));
+  #endif
+
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
      threads/intr-stubs.S).  Because intr_exit takes all of its
@@ -219,6 +226,8 @@ process_wait (tid_t child_tid)
   }
 
   // parent block AND exit status synch between parent and child
+
+  // FAULTING HERE
   sema_down(&childpd->wait_sema);
 
   // for debugging
@@ -623,7 +632,6 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
       /* Set up SPT entry */
       spte->vaddr = upage; // kernel virtual address
       spte->writable = writable;
-      spte->pinned = false; // unpinned by default
       spte->status = IN_FILESYS; // where to look on page fault
       spte->source = page_read_bytes == 0 ? SOURCE_ZERO : SOURCE_FILE;
       lock_init(&spte->page_lock);
@@ -685,61 +693,87 @@ setup_stack_args_helper (void **esp, const char *file_name)
   int argc = 0;
   char *argv[32];
 
+  // Collect all arguments
   for (token = strtok_r(fn_copy, " ", &save_ptr); token != NULL; 
-  token = strtok_r(NULL, " ", &save_ptr)) {
+       token = strtok_r(NULL, " ", &save_ptr)) {
     if (argc >= 32) {
       palloc_free_page(fn_copy);
       return false;
     }
-    argv[argc] = token;
+    
+    // Safety check: make sure token is valid
+    if (token == NULL || strlen(token) == 0) {
+      argv[argc] = "";  // Use empty string instead of NULL
+    } else {
+      argv[argc] = token;
+    }
+    
     argc++;
-  
   }
 
   // the total size needed for the strings
   size_t total_size = 0;
   for (int i = 0; i < argc; i++) {
+    // Safety check: ensure argv[i] is valid
+    if (argv[i] == NULL) {
+      argv[i] = "";  // Replace NULL with empty string
+    }
     total_size += strlen(argv[i]) + 1;
-
   }
 
-    total_size += 4 * (argc + 1);  // argv pointers + null sentinel
-    total_size += 4;               // argv
-    total_size += 4;               // argc
-    total_size += 4;               // return address
-    total_size += total_size % 4;  // alignment padding
+  // Rest of size calculations
+  total_size += 4 * (argc + 1);  // argv pointers + null sentinel
+  total_size += 4;               // argv
+  total_size += 4;               // argc
+  total_size += 4;               // return address
+  total_size += total_size % 4;  // alignment padding
 
-    // Check against page size
-    if (total_size > PGSIZE) {
-        palloc_free_page(fn_copy);
-        return false;
-    }
+  // Check against page size
+  if (total_size > PGSIZE) {
+      palloc_free_page(fn_copy);
+      return false;
+  }
 
-  // this aligns stack pointer
+  // Align stack pointer
   *esp = (void*)((unsigned int)(*esp) & ~3);
 
-  // copy strings to stack
+  // Copy strings to stack
   char *arg_addrs[argc];
   for (int i = argc - 1; i >= 0; i--) {
-    size_t len = strlen(argv[i]) + 1;
-    *esp -= len;
-    strlcpy(*esp, argv[i], len);
-    arg_addrs[i] = *esp;
+    // Safety check: ensure argv[i] is valid before using
+    if (argv[i] == NULL || strlen(argv[i]) == 0) {
+      // Push an empty string
+      *esp -= 1;
+      *(char*)*esp = '\0';
+      arg_addrs[i] = *esp;
+    } else {
+      size_t len = strlen(argv[i]) + 1;
+      *esp -= len;
+      strlcpy(*esp, argv[i], len);
+      arg_addrs[i] = *esp;
+    }
   }
 
+  // Word-align for better performance
   *esp = (void*)((unsigned int)(*esp) & ~3);
 
+  // Push NULL sentinel for argv[]
   *esp -= 4;
   *(char**)*esp = NULL;
 
-  // Push argument addresses
+  // Push argument addresses (argv[argc-1] down to argv[0])
   for (int i = argc - 1; i >= 0; i--) {
     *esp -= 4;
-    *(char**)*esp = arg_addrs[i];
+    // Verify arg_addrs[i] is valid before pushing
+    if (arg_addrs[i] == NULL) {
+      // This should never happen with our safety checks above
+      *(char**)*esp = "";  // Empty string is safer than NULL
+    } else {
+      *(char**)*esp = arg_addrs[i];
+    }
   }
 
-
-  // Push argv
+  // Push argv (address of argv[0])
   char **argv_addr = *esp;
   *esp -= 4;
   *(char***)*esp = argv_addr;
@@ -750,16 +784,116 @@ setup_stack_args_helper (void **esp, const char *file_name)
 
   // Push fake return address
   *esp -= 4;
-  *(void**)*esp = NULL;
+  *(void**)*esp = (void*)0xffffffff;
 
   palloc_free_page(fn_copy);
 
-  // print out stack contents for debugging purposes
-  // printf("Arguments setup complete. Stack contents:\n");
-  // hex_dump((uintptr_t)*esp, *esp, PHYS_BASE - *esp, true);
+  // Debug: print stack contents
+  hex_dump((uintptr_t)*esp, *esp, PHYS_BASE - *esp, true);
 
   return true;
 }
+
+// static bool
+// setup_stack_args_helper (void **esp, const char *file_name) 
+// {
+//   char *fn_copy = palloc_get_page(0);
+//   if (fn_copy == NULL) {
+//     return false;
+//   }
+
+//   strlcpy(fn_copy, file_name, PGSIZE);
+
+//   char *token;
+//   char *save_ptr;
+
+//   int argc = 0;
+//   char *argv[32];
+
+//   for (token = strtok_r(fn_copy, " ", &save_ptr); token != NULL; 
+//   token = strtok_r(NULL, " ", &save_ptr)) {
+//     if (argc >= 32) {
+//       palloc_free_page(fn_copy);
+//       return false;
+//     }
+
+//     if (token == NULL || strlen(token) == 0) {
+//       argv[argc] = "";
+//     } else {
+//       argv[argc] = token;
+//     }
+
+//     argc++;
+  
+//   }
+
+//   // the total size needed for the strings
+//   size_t total_size = 0;
+//   for (int i = 0; i < argc; i++) {
+//     if (argv[i] == NULL) {
+//       argv[i] = "";
+//     }
+//     total_size += strlen(argv[i]) + 1;
+
+//   }
+
+//     total_size += 4 * (argc + 1);  // argv pointers + null sentinel
+//     total_size += 4;               // argv
+//     total_size += 4;               // argc
+//     total_size += 4;               // return address
+//     total_size += total_size % 4;  // alignment padding
+
+//     // Check against page size
+//     if (total_size > PGSIZE) {
+//         palloc_free_page(fn_copy);
+//         return false;
+//     }
+
+//   // this aligns stack pointer
+//   *esp = (void*)((unsigned int)(*esp) & ~3);
+
+//   // copy strings to stack
+//   char *arg_addrs[argc];
+//   for (int i = argc - 1; i >= 0; i--) {
+//     size_t len = strlen(argv[i]) + 1;
+//     *esp -= len;
+//     strlcpy(*esp, argv[i], len);
+//     arg_addrs[i] = *esp;
+//   }
+
+//   *esp = (void*)((unsigned int)(*esp) & ~3);
+
+//   *esp -= 4;
+//   *(char**)*esp = NULL;
+
+//   // Push argument addresses
+//   for (int i = argc - 1; i >= 0; i--) {
+//     *esp -= 4;
+//     *(char**)*esp = arg_addrs[i];
+//   }
+
+
+//   // Push argv
+//   char **argv_addr = *esp;
+//   *esp -= 4;
+//   *(char***)*esp = argv_addr;
+
+//   // Push argc
+//   *esp -= 4;
+//   *(int*)*esp = argc;
+
+//   // Push fake return address
+//   *esp -= 4;
+//   *(void**)*esp = (void*)0xffffffff;
+
+//   palloc_free_page(fn_copy);
+
+//   // print out stack contents for debugging purposes
+//   // printf("Arguments setup complete. Stack contents:\n");
+//   hex_dump((uintptr_t)*esp, *esp, PHYS_BASE - *esp, true);
+
+//   return true;
+// }
 
 
 
@@ -786,21 +920,33 @@ setup_stack (void **esp, const char *file_name)
           return false;
         }
 
+        // printf("Creating stack SPT entry at %p\n", ((uint8_t *) PHYS_BASE) - PGSIZE);
+
         spte->vaddr = ((uint8_t *) PHYS_BASE) - PGSIZE;
         spte->writable = true;
-        spte->pinned = true; // pinned until setup is complete
         spte->status = IN_MEMORY;
         spte->source = SOURCE_ZERO;
         lock_init(&spte->page_lock);
 
+        // Register the kpage with the frame system
+        if (frame_register(kpage, spte) == NULL) {
+          printf("Failed to register stack frame\n");
+          free(spte);
+          palloc_free_page(kpage);
+          return false;
+        }
+
+        // Don't call frame_pin here - frame_register already sets pinned=true
+
         if (!sup_page_table_insert(&thread_current()->spt, spte)) {
+          printf("Failed to insert stack SPT entry\n");
           free(spte);
           palloc_free_page(kpage);
           return false;
         }
 
         success = setup_stack_args_helper(esp, file_name);
-        spte->pinned = false; // unpin the frame now that it's set up
+        // frame_unpin(kpage);
 #else
         success = setup_stack_args_helper(esp, file_name);
 #endif

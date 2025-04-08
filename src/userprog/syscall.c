@@ -48,6 +48,7 @@ syscall_init (void)
 static void
 syscall_handler (struct intr_frame *f) 
 {  
+  printf("system call!\n");
   // relevant stack data is 4 bytes and aligned
   int *esp = f->esp; // user virtual memory
 
@@ -573,8 +574,21 @@ translate_uvaddr(void *uptr) {
   
   void *kptr = pagedir_get_page(thread_current()->pagedir, uptr);
   if (kptr == NULL) {
+    #ifdef VM
+    // To confirm: these are user virtual addresses because we have a
+    // SPT for each user process
+    // what's the deal with the kernel?
+    struct sup_page_table_entry *spte = 
+      sup_page_table_lookup(&thread_current()->spt, pg_round_down(uptr));
+      if (spte == NULL) {
+        exit_handler(-1); // invalid memory access, segfault
+        NOT_REACHED();
+      }
+      return uptr; // will cause page fault when accessed
+    #else
     exit_handler(-1); // invalid memory access, segfault
     NOT_REACHED();
+    #endif
   }
 
   // accesses the kernel virtual address
