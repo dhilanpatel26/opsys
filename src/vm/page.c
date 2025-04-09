@@ -31,6 +31,9 @@ sup_page_table_insert(struct hash *spt, struct sup_page_table_entry *spte)
 struct sup_page_table_entry *
 sup_page_table_lookup(struct hash *spt, void *vaddr)
 {
+  if (spt == NULL || vaddr == NULL)
+    return NULL;
+
   struct sup_page_table_entry spte;
   struct hash_elem *e;
   
@@ -73,8 +76,9 @@ load_page(struct sup_page_table_entry *spte)
       
     case IN_FILESYS:
       /* Read/write bytes already validated in lazy loading */
-      printf("DEBUG: Loading page from file %p, offset %d, read_bytes %d\n",
-             spte->vaddr, spte->file_offset, spte->read_bytes);
+
+      // printf("DEBUG: Loading page from file %p, offset %d, read_bytes %d\n",
+      //        spte->vaddr, spte->file_offset, spte->read_bytes);
 
       /* Handling demand paging from file */
       if (spte->read_bytes == 0) {
@@ -86,7 +90,7 @@ load_page(struct sup_page_table_entry *spte)
 
         /* Releases frame table lock during I/O for parallelism */
         frame_pin(kpage);  /* Prevent eviction during I/O */
-        
+
         /* File I/O occupied, does not need to hold locks */
         file_seek(spte->file, spte->file_offset);
         if (file_read(spte->file, kpage, spte->read_bytes) != (int) spte->read_bytes) {
@@ -113,13 +117,14 @@ load_page(struct sup_page_table_entry *spte)
   if (success && 
       pagedir_get_page(thread_current()->pagedir, spte->vaddr) == NULL &&
       pagedir_set_page(thread_current()->pagedir, spte->vaddr, kpage, spte->writable)) {
-    printf("DEBUG: Page %p loaded successfully\n", spte->vaddr);
+    // printf("DEBUG: Page %p loaded successfully\n", spte->vaddr);
     spte->status = IN_MEMORY;
     frame_unpin(kpage);  /* Unpin the frame now that it's set up */
     return true;
   }
   
-  printf("DEBUG: Failed to load page %p\n", spte->vaddr);
+  // printf("DEBUG: Failed to load page %p\n", spte->vaddr);
+  
   /* If we get here, loading failed */
   frame_free(kpage);
 #endif

@@ -29,7 +29,7 @@ frame_table_init(void)
 /* Finds the frame that contains the given kernel page */
 void *frame_lookup(void *vaddr) 
 {
-  printf("Frame lookup for vaddr: %p\n", vaddr);
+  // printf("Frame lookup for vaddr: %p\n", vaddr);
   struct list_elem *e;
   struct frame_entry *f;
   void *kpage = NULL;
@@ -39,8 +39,8 @@ void *frame_lookup(void *vaddr)
   for (e = list_begin(&frame_list); e != list_end(&frame_list); e = list_next(e)) {
     f = list_entry(e, struct frame_entry, elem);
     // Debug print to see what's in the frame table
-    printf("Frame entry: kpage=%p, spte->vaddr=%p, looking for %p\n", 
-           f->kpage, f->spte->vaddr, vaddr);
+    // printf("Frame entry: kpage=%p, spte->vaddr=%p, looking for %p\n", 
+    //        f->kpage, f->spte->vaddr, vaddr);
     if (f->spte != NULL && f->spte->vaddr == vaddr) {
       kpage = f->kpage;
       break;
@@ -142,7 +142,8 @@ frame_evict(void)
       // this is through the user page directory, so we need to make sure 
       // that the kernel always uses the user page directory to access the page.
       // need to modify syscall accordingly (some translations right, some wrong).
-      if (pagedir_is_dirty(f->owner->pagedir, f->spte->vaddr)) {
+      if (pagedir_is_dirty(f->owner->pagedir, f->spte->vaddr) ||
+          pagedir_is_dirty(thread_current()->pagedir, kpage)) {
         extern bool swap_available;
         if (!swap_available) {
           lock_release(&f->spte->page_lock);
@@ -266,7 +267,7 @@ frame_register(void *kpage, struct sup_page_table_entry *spte)
   f->owner = thread_current();
   #endif
   f->spte = spte;
-  f->pinned = true;  // Pinned by default???
+  f->pinned = true;  // Pinned by default during setup
   
   /* Add to frame table */
   list_push_back(&frame_list, &f->elem);

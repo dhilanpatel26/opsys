@@ -145,29 +145,10 @@ page_fault (struct intr_frame *f)
      (#PF)". */
   asm ("movl %%cr2, %0" : "=r" (fault_addr));
 
-  // In your existing code where you detect NULL access
-  if (fault_addr == NULL) {
-   printf("NULL POINTER ACCESS IN USER PROGRAM\n");
-   printf("EIP: %p (instruction pointer)\n", (void*)f->eip);
-   printf("ESP: %p (stack pointer)\n", (void*)f->esp);
-   
-   // Print first few words from stack to see what program is trying to do
-   #ifdef USERPROG
-   if (is_user_vaddr(f->esp) && pagedir_get_page(thread_current()->pagedir, f->esp)) {
-     printf("Stack: ");
-     for (int i = 0; i < 4; i++) {
-       printf("%08x ", ((int*)f->esp)[i]);
-     }
-     printf("\n");
-   }
-   #endif
- }
-
-//   if (fault_addr == NULL) {
-//    printf("Instruction at %p tried to access NULL\n", (void*)f->eip);
-//    printf("Registers: eax=%08x, ebx=%08x, ecx=%08x, edx=%08x\n", 
-//           f->eax, f->ebx, f->ecx, f->edx);
-//   }
+//   #ifdef VM
+//    printf("Registers: eax=%08x, ebx=%08x, ecx=%08x, edx=%08x, eip=%08x, ebp=%08x, esp=%08x\n", 
+//           f->eax, f->ebx, f->ecx, f->edx, f->eip, f->ebp, f->esp);
+//    #endif
 
   /* Turn interrupts back on (they were only off so that we could
      be assured of reading CR2 before it changed). */
@@ -188,21 +169,24 @@ page_fault (struct intr_frame *f)
    return;
   }
 
-  printf("DEBUG: Page fault at %p (rounded: %p)\n", fault_addr, pg_round_down(fault_addr));
+//   #ifdef VM
+//   printf("DEBUG: Page fault at %p (rounded: %p)\n", fault_addr, pg_round_down(fault_addr));
 //   printf("DEBUG: not_present=%d write=%d user=%d\n", not_present, write, user);
+//   #endif
 
 #ifdef VM
 /* Is this a valid page fault that can be handled by VM system? */
   if (not_present) {
    /* Round down to get page address */
    void *page_addr = pg_round_down(fault_addr);
+   
    // printf("DEBUG: Page fault at %p (rounded: %p)\n", fault_addr, page_addr);
 
    /* Check if the page is in the supplemental page table */
    struct sup_page_table_entry *spte = 
       sup_page_table_lookup(&thread_current()->spt, page_addr);
 
-   printf("DEBUG: SPT entry found: %p\n", spte);
+   // printf("DEBUG: SPT entry found: %p\n", spte);
 
    /* If page exists in SPT and access type is valid */
    if (spte != NULL && !(write && !spte->writable)) {

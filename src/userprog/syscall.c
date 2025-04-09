@@ -48,7 +48,8 @@ syscall_init (void)
 static void
 syscall_handler (struct intr_frame *f) 
 {  
-  printf("system call!\n");
+  // printf("system call!\n");
+
   // relevant stack data is 4 bytes and aligned
   int *esp = f->esp; // user virtual memory
 
@@ -265,23 +266,15 @@ write_handler (int fd, const void *user_buffer, unsigned length) {
     return 0;
   }
 
-  // Loop 1: Before buffer validation
-  // for(;;);
-
   if(!validate_buffer(user_buffer, length)){
     exit_handler(-1);  // Terminate the process
     NOT_REACHED();
   }
 
-  // Loop 2: After buffer validation, before fd checks
-  // for(;;);
-
   if (fd <= 0 || fd >= FILE_TABLE_SIZE) {
     return -1;
   }
   
-  // Loop 3: Before stdout handling
-  // for(;;);
   size_t page_count = (length + PGSIZE - 1) / PGSIZE;
 
   if (fd == 1) {
@@ -290,21 +283,10 @@ write_handler (int fd, const void *user_buffer, unsigned length) {
       return -1;
     }
 
-    // // Manually copy the first few bytes to be ultra-safe
-    // char safe_buffer[256];
-    // for (unsigned i = 0; i < length; i++) {
-    //   void *src_ptr = translate_uvaddr((void*)((char*)user_buffer + i));
-    //   safe_buffer[i] = *(char*)src_ptr;
-    // }
-
     putbuf(kernel_buffer, length);
-    // putbuf(safe_buffer, length);
     palloc_free_multiple(kernel_buffer, page_count);
     return length;
   }
-
-  // Loop 4: Before file operations
-  // for(;;);
 
   struct thread *cur = thread_current();
 
@@ -317,9 +299,6 @@ write_handler (int fd, const void *user_buffer, unsigned length) {
   if (kernel_buffer == NULL) {
     return -1;
   }
-
-  // Loop 5: Before actual file write
-  // for(;;);
 
   lock_acquire(&filesys_lock);
   int bytes_written = file_write(file, kernel_buffer, length);
