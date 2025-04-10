@@ -188,25 +188,25 @@ page_fault (struct intr_frame *f)
 
    // printf("DEBUG: SPT entry found: %p\n", spte);
 
-   /* If page exists in SPT and access type is valid */
-   if (spte != NULL && !(write && !spte->writable)) {
-      /* Lock this page during fault handling */
+   /* If SPTE exists (it really should) */
+   if (spte != NULL) {
+      /* Lock SPTE while checking shared fields */
       lock_acquire(&spte->page_lock);
 
-      /* Another process could have loaded the page while we blocked */
-      if (spte->status == IN_MEMORY) {
-         /* Page is already in memory, nothing to do */
+      /* If valid access */
+      if (!(write && !spte->writable)) {
+
+         bool success = load_page(spte);
+
          lock_release(&spte->page_lock);
-         return;
-      }
 
-      /* Try to load page */
-      bool success = load_page(spte);
-      lock_release(&spte->page_lock); /* Release ASAP */
-
-      if (success) {
-         /* Page loaded successfully */
-         return;
+         /* Don't need lock, using value that won't change */
+         if (success)
+            return;
+         
+      } else {
+         /* Invalid access */
+         lock_release(&spte->page_lock);
       }
    }
   }

@@ -13,6 +13,9 @@
 #include "vm/swap.h"
 #endif
 
+static int total_frames = 0;
+static int pinned_frames = 0;
+
 static struct list frame_list;       /* List of all frames */
 static struct lock frame_table_lock; /* Lock for frame table operations */
 
@@ -90,14 +93,107 @@ frame_allocate(enum palloc_flags flags, struct sup_page_table_entry *spte)
   f->owner = thread_current();
   f->spte = spte;
 #endif
+  pinned_frames++;
   f->pinned = true;  // Pin it initially while we set it up
   
   list_push_back(&frame_list, &f->elem);
+
+  total_frames++;
+  // printf("DEBUG: Frame allocated: %p (total: %d, pinned:, %d)\n", 
+  //   kpage, total_frames, pinned_frames);
+
   lock_release(&frame_table_lock);
   
   return kpage;
 }
 
+// static void *
+// frame_evict(void) 
+// {
+// #ifdef USERPROG
+//   static struct list_elem *clock_ptr = NULL;
+//   struct frame_entry *f;
+  
+//   /* Scan for a frame to evict */
+//   size_t iterations = 0;
+//   size_t num_frames = list_size(&frame_list);
+  
+//   while (iterations < 2 * num_frames) {
+//     /* Precondition: Must hold frame_table_lock while scanning (frame_allocate acquired) */
+//     if (clock_ptr == NULL || clock_ptr == list_end(&frame_list))
+//       clock_ptr = list_begin(&frame_list);
+      
+//     f = list_entry(clock_ptr, struct frame_entry, elem);
+//     clock_ptr = list_next(clock_ptr);
+    
+//     /* Skip pinned frames */
+//     if (f->pinned)
+//       continue;
+      
+//     /* Try to acquire the page lock for this frame's SPT entry */
+//     if (!lock_try_acquire(&f->spte->page_lock)) {
+//       /* Skip if we can't get the lock without blocking */
+//       iterations++;
+//       continue;
+//     }
+      
+//     /* Check accessed bit */
+//     if (pagedir_is_accessed(f->owner->pagedir, f->spte->vaddr)) {
+//       /* Give a second chance */
+//       pagedir_set_accessed(f->owner->pagedir, f->spte->vaddr, false);
+//       lock_release(&f->spte->page_lock);
+//     } else {
+//       /* Evict this frame - we hold both the frame table lock and the page lock */
+//       void *kpage = f->kpage;
+      
+//       /* If dirty, write to swap */
+
+//       // this is through the user page directory, so we need to make sure 
+//       // that the kernel always uses the user page directory to access the page.
+//       // need to modify syscall accordingly (some translations right, some wrong).
+//       if (pagedir_is_dirty(f->owner->pagedir, f->spte->vaddr) ||
+//           pagedir_is_dirty(thread_current()->pagedir, kpage)) {
+//         extern bool swap_available;
+//         if (!swap_available) {
+//           lock_release(&f->spte->page_lock);
+//           continue; // Skip this frame, can't swap
+//         }
+
+//         /* Temporarily release frame table lock during I/O for parallelism */
+//         lock_release(&frame_table_lock);
+        
+//         /* Do swap I/O while holding only the page lock */
+//         f->spte->swap_index = swap_out(kpage);
+//         f->spte->status = IN_SWAP;
+        
+//         /* Reacquire frame table lock */
+//         lock_acquire(&frame_table_lock);
+//       } else if (f->spte->source == SOURCE_FILE) {
+//         /* Clean page from file, just update status */
+//         /* No need to write back to file */
+//         f->spte->status = IN_FILESYS;
+//       }
+      
+//       /* Remove mapping from page table */
+//       pagedir_clear_page(f->owner->pagedir, f->spte->vaddr);
+      
+//       /* Update SPT and release page lock */
+//       lock_release(&f->spte->page_lock);
+      
+//       /* Remove from frame table */
+//       list_remove(&f->elem);
+//       free(f);
+      
+//       return kpage;
+//     }
+    
+//     iterations++;
+//   }
+// #endif
+//   return NULL; /* Could not evict any frame */
+// }
+
+/* Called with frame_table_lock held. Do not release. */
 static void *
 frame_evict(void) 
 {
@@ -109,8 +205,10 @@ frame_evict(void)
   size_t iterations = 0;
   size_t num_frames = list_size(&frame_list);
   
+  // printf("DEBUG: Starting eviction (frames: %zu, pinned: %d)\n", 
+  //        num_frames, pinned_frames);
+         
   while (iterations < 2 * num_frames) {
-    /* Precondition: Must hold frame_table_lock while scanning (frame_allocate acquired) */
     if (clock_ptr == NULL || clock_ptr == list_end(&frame_list))
       clock_ptr = list_begin(&frame_list);
       
@@ -118,42 +216,55 @@ frame_evict(void)
     clock_ptr = list_next(clock_ptr);
     
     /* Skip pinned frames */
-    if (f->pinned)
+    if (f->pinned) {
+      // printf("DEBUG: Skipping pinned frame %p\n", f->kpage);
+      /* Still count this as an iteration */
+      iterations++;
       continue;
+    }
       
     /* Try to acquire the page lock for this frame's SPT entry */
+    // Note: the page we are trying to acquire should not have a frame in the list
     if (!lock_try_acquire(&f->spte->page_lock)) {
       /* Skip if we can't get the lock without blocking */
-      iterations++;
+      // printf("DEBUG: Skipping frame %p - could not acquire lock\n", f->kpage);
+      /* Don't count as an iteration? */
       continue;
     }
       
     /* Check accessed bit */
     if (pagedir_is_accessed(f->owner->pagedir, f->spte->vaddr)) {
       /* Give a second chance */
+      // printf("DEBUG: Frame %p accessed, giving second chance\n", f->kpage);
       pagedir_set_accessed(f->owner->pagedir, f->spte->vaddr, false);
       lock_release(&f->spte->page_lock);
     } else {
-      /* Evict this frame - we hold both the frame table lock and the page lock */
+      /* We found a frame to evict - it hasn't been accessed */
       void *kpage = f->kpage;
       
+      // printf("DEBUG: Evicting frame %p (not recently accessed)\n", kpage);
+      
       /* If dirty, write to swap */
-
-      // this is through the user page directory, so we need to make sure 
-      // that the kernel always uses the user page directory to access the page.
-      // need to modify syscall accordingly (some translations right, some wrong).
       if (pagedir_is_dirty(f->owner->pagedir, f->spte->vaddr) ||
           pagedir_is_dirty(thread_current()->pagedir, kpage)) {
         extern bool swap_available;
         if (!swap_available) {
+          // printf("DEBUG: Cannot evict frame %p - swap not available\n", kpage);
           lock_release(&f->spte->page_lock);
+          iterations++;
           continue; // Skip this frame, can't swap
         }
+
+        // printf("DEBUG: Writing dirty frame %p to swap\n", kpage);
+        
+        /* Pin frame to prevent race conditions when we release the frame table lock */
+        f->pinned = true;
+        pinned_frames++;
 
         /* Temporarily release frame table lock during I/O for parallelism */
         lock_release(&frame_table_lock);
         
-        /* Do swap I/O while holding only the page lock */
+        /* Still holding page_lock */
         f->spte->swap_index = swap_out(kpage);
         f->spte->status = IN_SWAP;
         
@@ -161,25 +272,38 @@ frame_evict(void)
         lock_acquire(&frame_table_lock);
       } else if (f->spte->source == SOURCE_FILE) {
         /* Clean page from file, just update status */
-        /* No need to write back to file */
+        // printf("DEBUG: Clean frame %p from file, no need to write back\n", kpage);
         f->spte->status = IN_FILESYS;
       }
       
-      /* Remove mapping from page table */
+      /* Remove mapping from page table for the evicted frame */
       pagedir_clear_page(f->owner->pagedir, f->spte->vaddr);
       
-      /* Update SPT and release page lock */
       lock_release(&f->spte->page_lock);
       
-      /* Remove from frame table */
+      /* Remove evicted from frame table */
       list_remove(&f->elem);
+      
+      /* If frame was pinned, decrement pinned count */
+      if (f->pinned) {
+        pinned_frames--;
+      }
+      
+      /* Update accounting */
+      total_frames--;
+      
+      /* Free the frame entry but not the physical page, will reuse! */
       free(f);
       
-      return kpage;
+      // printf("DEBUG: Successfully evicted frame %p\n", kpage);
+      return kpage; /* Reusing physical address of frame (translated to kernel vaddr here) */
     }
     
     iterations++;
   }
+  
+  // printf("DEBUG: Eviction failed! Too many pinned frames (%zu/%zu) or locks unavailable\n", 
+  //        pinned_frames, num_frames);
 #endif
   return NULL; /* Could not evict any frame */
 }
@@ -200,6 +324,10 @@ frame_pin(void *kpage)
       break;
     }
   }
+
+  pinned_frames++;
+  // printf("DEBUG: Frame pinned: %p (total: %d, pinned: %d)\n", 
+  //       kpage, total_frames, pinned_frames);
   
   lock_release(&frame_table_lock);
 }
@@ -220,6 +348,10 @@ frame_unpin(void *kpage)
       break;
     }
   }
+
+  pinned_frames--;
+  // printf("DEBUG: Frame unpinned: %p (total: %d, pinned: %d)\n", 
+  //       kpage, total_frames, pinned_frames);
   
   lock_release(&frame_table_lock);
 }
@@ -236,12 +368,19 @@ frame_free(void *kpage)
   for (e = list_begin(&frame_list); e != list_end(&frame_list); e = list_next(e)) {
     f = list_entry(e, struct frame_entry, elem);
     if (f->kpage == kpage) {
+      if (f->pinned) {
+        pinned_frames--;
+      }
       list_remove(&f->elem);
       palloc_free_page(kpage);
       free(f);
       break;
     }
   }
+
+  total_frames--;
+  // printf("DEBUG: Frame freed: %p (total: %d, pinned: %d)\n", 
+  //        kpage, total_frames, pinned_frames);
   
   lock_release(&frame_table_lock);
 }
@@ -267,6 +406,8 @@ frame_register(void *kpage, struct sup_page_table_entry *spte)
   f->owner = thread_current();
   #endif
   f->spte = spte;
+
+  pinned_frames++;
   f->pinned = true;  // Pinned by default during setup
   
   /* Add to frame table */

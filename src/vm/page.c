@@ -44,29 +44,42 @@ sup_page_table_lookup(struct hash *spt, void *vaddr)
   return e != NULL ? hash_entry(e, struct sup_page_table_entry, hash_elem) : NULL;
 }
 
-/* Load a page according to its type. Called after a page fault where
-   the SPT entry exists and the access type is valid. */
+/* Called with spte locked by caller page_fault. Return with spte lock held. */
 bool
 load_page(struct sup_page_table_entry *spte)
 {
 #ifdef USERPROG
+  /* Page is already in memory, nothing to do */
+  if (spte->status == IN_MEMORY)
+    return true;
+
+  /* Release-and-recheck pattern with two-phase locking */
+  /* Temporarily release lock before allocating frame to avoid deadlocks */
+  lock_release(&spte->page_lock);
+
   /* Allocate a frame for the page */
   void *kpage = frame_allocate(PAL_USER, spte);
   if (kpage == NULL) {
-    printf("DEBUG: Failed to allocate frame for page %p\n", spte->vaddr);
+    lock_acquire(&spte->page_lock);
     return false;
+  }
+
+  /* Re-acquire the lock after frame allocation */
+  lock_acquire(&spte->page_lock);
+
+  /* Check again if another thread loaded it while we were allocating */
+  if (spte->status == IN_MEMORY) {
+    /* Page was loaded by another thread, free our frame */
+    frame_free(kpage);
+    lock_release(&spte->page_lock);
+    return true;
   }
 
   bool success = false;
   
   switch (spte->status)
-  {
-    case IN_MEMORY:
-      /* Already in memory, nothing to do */
-      success = true;
-      break;
-      
-    case IN_SWAP: // TOOD: fully implement swap.c
+  {   
+    case IN_SWAP:
       /* Load from swap */
       swap_in(spte->swap_index, kpage);
       spte->status = IN_MEMORY;
@@ -75,11 +88,6 @@ load_page(struct sup_page_table_entry *spte)
       break;
       
     case IN_FILESYS:
-      /* Read/write bytes already validated in lazy loading */
-
-      // printf("DEBUG: Loading page from file %p, offset %d, read_bytes %d\n",
-      //        spte->vaddr, spte->file_offset, spte->read_bytes);
-
       /* Handling demand paging from file */
       if (spte->read_bytes == 0) {
         /* All bytes to zero */
@@ -88,10 +96,9 @@ load_page(struct sup_page_table_entry *spte)
       } else {
         /* Some to read, potentially some to zero */
 
-        /* Releases frame table lock during I/O for parallelism */
         frame_pin(kpage);  /* Prevent eviction during I/O */
 
-        /* File I/O occupied, does not need to hold locks */
+        /* File I/O doesn't need frame table lock */
         file_seek(spte->file, spte->file_offset);
         if (file_read(spte->file, kpage, spte->read_bytes) != (int) spte->read_bytes) {
           frame_free(kpage);
@@ -111,19 +118,18 @@ load_page(struct sup_page_table_entry *spte)
       memset(kpage, 0, PGSIZE);
       success = true;
       break;
+    default:
+      PANIC("Invalid page status");
   }
   
   /* If successful, add the page to the process's page table */
   if (success && 
       pagedir_get_page(thread_current()->pagedir, spte->vaddr) == NULL &&
       pagedir_set_page(thread_current()->pagedir, spte->vaddr, kpage, spte->writable)) {
-    // printf("DEBUG: Page %p loaded successfully\n", spte->vaddr);
     spte->status = IN_MEMORY;
     frame_unpin(kpage);  /* Unpin the frame now that it's set up */
     return true;
   }
-  
-  // printf("DEBUG: Failed to load page %p\n", spte->vaddr);
   
   /* If we get here, loading failed */
   frame_free(kpage);
