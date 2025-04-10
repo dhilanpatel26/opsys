@@ -215,6 +215,7 @@ frame_evict(void)
     f = list_entry(clock_ptr, struct frame_entry, elem);
     clock_ptr = list_next(clock_ptr);
     
+    // printf("DEBUG: Checking frame %p (pinned: %d)\n", f->kpage, f->pinned);
     /* Skip pinned frames */
     if (f->pinned) {
       // printf("DEBUG: Skipping pinned frame %p\n", f->kpage);
@@ -239,6 +240,7 @@ frame_evict(void)
       pagedir_set_accessed(f->owner->pagedir, f->spte->vaddr, false);
       lock_release(&f->spte->page_lock);
     } else {
+      // printf("DEBUG: Evicting frame %p (not recently accessed)\n", f->kpage);
       /* We found a frame to evict - it hasn't been accessed */
       void *kpage = f->kpage;
       
@@ -248,7 +250,7 @@ frame_evict(void)
       if (pagedir_is_dirty(f->owner->pagedir, f->spte->vaddr) ||
           pagedir_is_dirty(thread_current()->pagedir, kpage)) {
         extern bool swap_available;
-        if (!swap_available) {
+        if (!swap_available && 0) {
           // printf("DEBUG: Cannot evict frame %p - swap not available\n", kpage);
           lock_release(&f->spte->page_lock);
           iterations++;
@@ -302,8 +304,8 @@ frame_evict(void)
     iterations++;
   }
   
-  // printf("DEBUG: Eviction failed! Too many pinned frames (%zu/%zu) or locks unavailable\n", 
-  //        pinned_frames, num_frames);
+  printf("DEBUG: Eviction failed! Too many pinned frames (%zu/%zu) or locks unavailable\n", 
+         pinned_frames, num_frames);
 #endif
   return NULL; /* Could not evict any frame */
 }

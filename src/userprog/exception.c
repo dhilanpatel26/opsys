@@ -148,7 +148,7 @@ page_fault (struct intr_frame *f)
 //   #ifdef VM
 //    printf("Registers: eax=%08x, ebx=%08x, ecx=%08x, edx=%08x, eip=%08x, ebp=%08x, esp=%08x\n", 
 //           f->eax, f->ebx, f->ecx, f->edx, f->eip, f->ebp, f->esp);
-//    #endif
+//   #endif
 
   /* Turn interrupts back on (they were only off so that we could
      be assured of reading CR2 before it changed). */

@@ -104,7 +104,6 @@ pintos_init (void)
   
 #ifdef VM
   frame_table_init();
-  swap_init();
   sup_page_table_init(&thread_current()->spt);
 #endif
 
@@ -137,6 +136,10 @@ pintos_init (void)
   ide_init ();
   locate_block_devices ();
   filesys_init (format_filesys);
+
+  #ifdef VM
+  swap_init();
+  #endif
 #endif
 
   printf ("Boot complete.\n");
