@@ -65,8 +65,13 @@ syscall_handler (struct intr_frame *f)
       return;
     }
     case SYS_EXIT: {
-      int status = *(int*) translate_uvaddr(esp + 1);
-      translate_uvaddr((void*)((char*)esp + 7));
+      // When reading an int, we should validate all 4 of its bytes
+      // Read the exit status byte by byte to handle page boundary crossing
+      int status = 0;
+      for (int i = 0; i < 4; i++) {
+        uint8_t *byte_ptr = (uint8_t*)translate_uvaddr((void*)((char*)(esp + 1) + i));
+        status |= ((*byte_ptr) << (i * 8));
+      }
       exit_handler(status);
       NOT_REACHED();
     }
