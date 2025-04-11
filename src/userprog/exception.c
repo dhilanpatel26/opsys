@@ -164,6 +164,13 @@ page_fault (struct intr_frame *f)
 
   // case one: handle kernel access to user memory (e.g. during syscall)
   if (!user && fault_addr < PHYS_BASE && is_user_vaddr(fault_addr)) {
+
+  // if this is a write to a read-only page...terminate process
+  if (!not_present && write) {
+    thread_exit();
+    NOT_REACHED();
+  }
+
    f->eip = (void*) f->eax;
    f->eax = 0xffffffff;
    return;
