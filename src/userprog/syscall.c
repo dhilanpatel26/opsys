@@ -33,8 +33,6 @@ static void seek_handler(int fd, unsigned position);
 static unsigned tell_handler(int fd);
 static int write_handler (int fd, const void *buffer, unsigned length);
 static bool validate_buffer (const void *buffer, unsigned length);
-static bool validate_buffer_read(const void *buffer, unsigned length);
-static bool validate_buffer_write(const void *buffer, unsigned length);
 
 struct lock filesys_lock; // filesys code is a critical section
 
@@ -215,61 +213,6 @@ validate_buffer (const void *buffer, unsigned length) {
     return false;
   }
 
-  // this is where the error is!
-  if (length > 1 && get_user(buf + length - 1) == -1) {
-    return false;
-  }
-
-  // check the bytes at the page boundaries
-  for (unsigned i = PGSIZE; i < length; i += PGSIZE) {
-    if (get_user(buf + i) == -1) {
-      return false;
-    }
-  }
-
-  return true;
-}
-
-static bool
-validate_buffer_read(const void *buffer, unsigned length) {
-  // For read operations, we only need to check if the buffer is in user space
-  if (buffer == NULL) {
-    return false;
-  }
-
-  if (length == 0) {
-    return true;
-  }
-
-  // check if buffer is a user vaddr
-  if (!is_user_vaddr(buffer) || !is_user_vaddr((char*)buffer + length - 1)) {
-    return false;
-  }
-
-  return true;
-}
-
-static bool
-validate_buffer_write(const void *buffer, unsigned length) {
-  // For write operations, we need to check if the buffer is accessible
-  if (buffer == NULL) {
-    return false;
-  }
-
-  if (length == 0) {
-    return true;
-  }
-
-  // check if buffer is a user vaddr
-  if (!is_user_vaddr(buffer) || !is_user_vaddr((char*)buffer + length - 1)) {
-    return false;
-  }
-
-  const uint8_t *buf = (const uint8_t *) buffer;
-  if (get_user(buf) == -1) {
-    return false;
-  }
-
   if (length > 1 && get_user(buf + length - 1) == -1) {
     return false;
   }
@@ -328,7 +271,7 @@ write_handler (int fd, const void *user_buffer, unsigned length) {
     return 0;
   }
 
-  if(!validate_buffer_write(user_buffer, length)){
+  if(!validate_buffer(user_buffer, length)){
     exit_handler(-1);  // Terminate the process
     NOT_REACHED();
   }
@@ -492,18 +435,15 @@ read_handler(int fd, void *user_buffer, unsigned length) {
     return 0;
   }
 
-  if (!validate_buffer_read(user_buffer, length)) {
-    printf("validate_buffer failed\n");
+  if (!validate_buffer(user_buffer, length)) {
     exit_handler(-1);  // Terminate the process
     NOT_REACHED();
   }
 
   size_t page_count = (length + PGSIZE - 1) / PGSIZE;
-  printf("page_count: %d\n", page_count);
 
   struct thread *cur = thread_current();
   if (fd == 0) {
-    printf("reading from stdin\n");
     // read from stdin
     void *kernel_buffer = palloc_get_multiple(0, page_count);
     if (kernel_buffer == NULL) {
@@ -527,20 +467,17 @@ read_handler(int fd, void *user_buffer, unsigned length) {
 
   // trying to read from stout or invalid fd
   if (fd < 2 || fd >= FILE_TABLE_SIZE || cur->fd_table[fd] == NULL) {
-    printf("invalid fd\n");
     return -1;
   }
     
   struct file *file = cur->fd_table[fd];
   if (file == NULL) {
-    printf("file is null\n");
     return -1;
   }
 
   
   void *kernel_buffer = palloc_get_multiple(0, page_count);
   if (kernel_buffer == NULL) {
-    printf("kernel_buffer is null\n");
     return -1;
   }
 
@@ -548,20 +485,15 @@ read_handler(int fd, void *user_buffer, unsigned length) {
   int bytes_read = file_read(file, kernel_buffer, length);
   lock_release(&filesys_lock);
 
-  printf("bytes_read: %d\n", bytes_read);
   if (bytes_read > 0) {
     for (int i = 0; i < bytes_read; i++) {
-      uint8_t *addr = (uint8_t*) user_buffer + i;
-      printf("Writing to address %p (page %p)\n", addr, pg_round_down(addr));
       if (!put_user((uint8_t*) user_buffer + i, ((uint8_t*) kernel_buffer)[i])) {
-        printf("put_user failed at index %d, address %p\n", i, addr);
         palloc_free_multiple(kernel_buffer, page_count);
         return -1;
       }
     }
   }
 
-  printf("freeing kernel_buffer\n");
   palloc_free_multiple(kernel_buffer, page_count);
   return (bytes_read >= 0) ? bytes_read : -1; 
 }
