@@ -9,7 +9,7 @@
 #ifdef USERPROG
 #include "userprog/pagedir.h"
 #endif
-
+extern struct lock filesys_lock;
 static void spt_entry_free(struct hash_elem *e, void *aux UNUSED);
 
 /* Initialize a supplemental page table */
@@ -99,11 +99,14 @@ load_page(struct sup_page_table_entry *spte)
         frame_pin(kpage);  /* Prevent eviction during I/O */
 
         /* File I/O doesn't need frame table lock */
+        lock_acquire(&filesys_lock);
         file_seek(spte->file, spte->file_offset);
         if (file_read(spte->file, kpage, spte->read_bytes) != (int) spte->read_bytes) {
           frame_free(kpage);
+          lock_release(&filesys_lock);
           return false;
         }
+        lock_release(&filesys_lock);
 
         /* Zero rest of page */
         if (spte->zero_bytes > 0)

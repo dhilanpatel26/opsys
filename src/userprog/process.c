@@ -639,6 +639,10 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
       spte->file_offset = ofs;
       spte->read_bytes = page_read_bytes;
       spte->zero_bytes = page_zero_bytes;
+      if (spte->file == NULL) {
+        free(spte);
+        return false;
+      }
 
       /* Insert into SPT */
       if (!sup_page_table_insert(&thread_current()->spt, spte)) {
