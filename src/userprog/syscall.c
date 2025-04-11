@@ -491,6 +491,8 @@ read_handler(int fd, void *user_buffer, unsigned length) {
     return 0;
   }
 
+  // printf("user_buffer: %p\n", user_buffer);
+
   // Basic address validity check before anything else
   if (user_buffer == NULL || !is_user_vaddr(user_buffer) || 
       !is_user_vaddr(user_buffer + length - 1)) {
@@ -509,29 +511,12 @@ read_handler(int fd, void *user_buffer, unsigned length) {
   for (void *page_addr = start_addr; page_addr <= end_addr; page_addr += PGSIZE) {
     struct sup_page_table_entry *spte = 
       sup_page_table_lookup(&thread_current()->spt, page_addr);
-      
+
+    /* Read buffers don't need to be allocated a frame but they
+       do need a SPT entry -- SPTEs should only be created at load. */
     if (spte == NULL) {
-      // Create a zero-filled page for reading into
-      spte = malloc(sizeof(struct sup_page_table_entry));
-      if (spte == NULL) {
-        printf("Failed to allocate SPTE\n");
-        exit_handler(-1);
-        NOT_REACHED();
-      }
-      
-      // Initialize as a zero page
-      spte->vaddr = page_addr;
-      spte->writable = true;  // Must be writable for reading into
-      spte->status = NOT_LOADED;
-      spte->source = SOURCE_ZERO;
-      lock_init(&spte->page_lock);
-      
-      if (!sup_page_table_insert(&thread_current()->spt, spte)) {
-        free(spte);
-        printf("Failed to insert page into SPT\n");
-        exit_handler(-1);
-        NOT_REACHED();
-      }
+      exit_handler(-1);
+      NOT_REACHED();
     }
     
     // Force load the page before validation
