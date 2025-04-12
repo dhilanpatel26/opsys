@@ -13,6 +13,9 @@
 #include "threads/vaddr.h"
 #ifdef USERPROG
 #include "userprog/process.h"
+#ifdef VM
+#include "vm/frame.h"
+#endif
 #endif
 
 /* Random value for struct thread's `magic' member.
@@ -296,6 +299,9 @@ thread_exit (void)
   ASSERT (!intr_context ());
 
 #ifdef USERPROG
+#ifdef VM
+  frame_free_thread_frames(thread_current());
+#endif
   process_exit ();
 #endif
 

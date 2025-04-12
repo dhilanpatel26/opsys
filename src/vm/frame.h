@@ -27,4 +27,8 @@ void frame_unpin(void *kpage);
 void *frame_lookup(void *vaddr);
 void *frame_register(void *kpage, struct sup_page_table_entry *spte);
 
+#ifdef USERPROG
+void frame_free_thread_frames(struct thread *t);
+#endif
+
 #endif

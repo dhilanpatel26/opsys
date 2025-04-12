@@ -422,3 +422,28 @@ frame_register(void *kpage, struct sup_page_table_entry *spte)
   lock_release(&frame_table_lock);
   return kpage;
 }
+
+/* prevents access of stale page frames from exited processes */
+#ifdef USERPROG
+void frame_free_thread_frames(struct thread *t) {
+  lock_acquire(&frame_table_lock);
+  
+  struct list_elem *e = list_begin(&frame_list);
+  while (e != list_end(&frame_list)) {
+      struct frame_entry *f = list_entry(e, struct frame_entry, elem);
+      struct list_elem *next = list_next(e);
+      
+      if (f->owner == t) {
+          // don't free the virtual page, that gets handled in process_exit
+          list_remove(&f->elem);
+          free(f);
+          total_frames--;
+          if (f->pinned) pinned_frames--;
+      }
+
+      e = next;
+  }
+  
+  lock_release(&frame_table_lock);
+}
+#endif
