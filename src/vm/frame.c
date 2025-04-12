@@ -340,18 +340,22 @@ frame_unpin(void *kpage)
 {
   struct list_elem *e;
   struct frame_entry *f;
+  if (kpage == NULL){
+    printf("DEBUG: Attempted to unpin NULL frame\n");
+    return;
+  }
   
   lock_acquire(&frame_table_lock);
-  
+  bool found = false; 
   for (e = list_begin(&frame_list); e != list_end(&frame_list); e = list_next(e)) {
     f = list_entry(e, struct frame_entry, elem);
     if (f->kpage == kpage) {
       f->pinned = false;
+      found = true;
       break;
     }
   }
-
-  pinned_frames--;
+  if (found) pinned_frames--;
   // printf("DEBUG: Frame unpinned: %p (total: %d, pinned: %d)\n", 
   //       kpage, total_frames, pinned_frames);
   

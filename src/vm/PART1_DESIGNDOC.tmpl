@@ -8,9 +8,9 @@
 
 >> Fill in the names and email addresses of your group members.
 
-FirstName LastName <email@domain.example>
-FirstName LastName <email@domain.example>
-FirstName LastName <email@domain.example>
+Jennifer Ye <jye37@jhu.edu>
+Dhilan Patel <dpatel93@jhu.edu>
+Katherine Forbes <kforbes6@jhu.edu>
 
 ---- PRELIMINARIES ----
 
@@ -30,24 +30,106 @@ FirstName LastName <email@domain.example>
 >> `struct' member, global or static variable, `typedef', or
 >> enumeration.  Identify the purpose of each in 25 words or less.
 
+enum page_status {
+  IN_MEMORY,
+  IN_SWAP,
+  IN_FILESYS,
+  NOT_LOADED
+};
+Purpose: Tracks current location of virtual page (e.g., in memory, 
+swap, or not loaded).
+
+enum page_source {
+  SOURCE_FILE, 
+  SOURCE_SWAP,
+  SOURCE_ZERO
+};
+Purpose: Records the original source of a page entry to decide how to 
+reload it on page fault.
+
+
+struct sup_page_table_entry {
+  void *vaddr; 
+  bool writable;
+  enum page_status status;
+  enum page_source source;
+  struct lock page_lock;
+
+  struct file *file;
+  off_t file_offset;
+  uint32_t read_bytes;
+  uint32_t zero_bytes;
+  swap_index_t swap_index;
+
+  struct hash_elem hash_elem;
+};
+Purpose: Stores metadata about user pages in a supplemental page 
+table for lazy loading, swapping, and fault handling (for memory-mapped file)
+
+extern struct lock filesys_lock; 
+Purpose: For exclusive usage of filen I/O by one process- preventing race condition.
+
 ---- ALGORITHMS ----
 
 >> A2: In a few paragraphs, describe your code for accessing the data
 >> stored in the SPT about a given page.
 
+If checking the SPT, that means it must be a page fault. We hash the virtual address to find the corresponding 
+sup_page_table_entry with sup_page_table_lookup. This entry tells us 
+where the data lives - either in swap (backup storage after being evicted),
+or file (backed and mapped to a file), etc)-- and how to load it. On page 
+fault, load_page() is called, which either loads from the file, swap,
+or zeroes the page.
+
+If the page resides in swap (status = IN_SWAP), the swap index stored 
+in the entry indicates where to read the page from the swap device. 
+The page is brought back into memory using swap_in().
+
+If the page is file-backed (status = IN_FILESYS), the entry includes the 
+file pointer, offset, and read-bytes information. This information guides
+loading the necessary bytes from the file into memory, filling the remainder
+with zeros as needed.
+
+If the page requires initialization to zero (status = ALL_ZERO), a new page of
+physical memory is allocated and zeroed without accessing a file or swap.
+
+
 >> A3: How does your code coordinate accessed and dirty bits between
 >> kernel and user virtual addresses that alias a single frame, or
 >> alternatively how do you avoid the issue?
+
+We rely on the accessed and dirty bits from the user page directory. 
+Since kernel accesses to user pages are discouraged ( avoid aliasing
+issues), we only access user memory using user virtual addresses. If
+kernel access is needed (in syscall.c for exmaple), we make sure  accessed/dirty
+bits are handled gracefully via pagedir_set_accessed/dirty.
+
 
 ---- SYNCHRONIZATION ----
 
 >> A4: When two user processes both need a new frame at the same time,
 >> how are races avoided?
 
+We have frame_table_lock to protect frame allocation and eviction from 
+race condition. Additionally, each sup_page_table_entry has its own 
+page_lock for during I/O and eviction to avoid deadlock.
+
 ---- RATIONALE ----
 
 >> A5: Why did you choose the data structure(s) that you did for
 >> representing virtual-to-physical mappings?
+
+Here's what we do to represent vtop mappings:
+* SPT: Hash table for fast lookups and insertion.
+* Frame Table: List for iteration during eviction (clock algorithm).
+* Swap Table: Bitmap for constant-time allocation and deallocation.
+
+We favored simpler, proven structures that were already integrated into Pintos.
+SPT is necessary since it contains meta-information about the status of page table
+that can't be captured by just having a page table; Frame table is needed to have
+a global view of all the active frames; And swap table keeps tracks of "backup 
+storage". In addition, for each data structure that can potentially accessed by 
+multiple threads, we protect it with locks to prevent deadlock.
 
           PAGING TO AND FROM DISK
           =======================
@@ -58,14 +140,41 @@ FirstName LastName <email@domain.example>
 >> `struct' member, global or static variable, `typedef', or
 >> enumeration.  Identify the purpose of each in 25 words or less.
 
+static struct bitmap *swap_bitmap;
+Purpose: Tracks used and free swap slots. Indexed by swap page.
+
+struct frame_entry {
+  void *kpage;
+  struct thread *owner;
+  struct sup_page_table_entry *spte;
+  bool pinned;
+  struct list_elem elem;
+};
+Purpose: tracks frame ownership, eviction eligibility, and connection to SPT.
+
 ---- ALGORITHMS ----
 
 >> B2: When a frame is required but none is free, some frame must be
 >> evicted.  Describe your code for choosing a frame to evict.
 
+The frame eviction process utilizes the "clock algorithm". We keep a pointer
+that circles the frame_list element by element for exaclty two cycles.
+If the pointer meets an "accessed page", it sets it to "unaccessed" but skips
+(aka giving second chance). However, if it sees any unaccessed page when it
+circles back, it would evict that page. Note that any pinned page is skipped.
+For the page that's picked for eviction, it either goes to swap or do nothing
+if it's in file system.
+
+
 >> B3: When a process P obtains a frame that was previously used by a
 >> process Q, how do you adjust the page table (and any other data
 >> structures) to reflect the frame Q no longer has?
+
+Before reuse, the frame’s previous page table mapping is removed via 
+pagedir_clear_page (marking it as not present and clear the TLB too), 
+which CPU will no longer able to translate virtual address to that evicted
+frame without causing a page fault. It also removes that entry from the 
+global frame list.
 
 ---- SYNCHRONIZATION ----
 
@@ -83,6 +192,10 @@ FirstName LastName <email@domain.example>
 >> the file system or swap.  How do you ensure that a second process Q
 >> cannot interfere by e.g. attempting to evict the frame while it is
 >> still being read in?
+
+Pages being paged in are immediately pinned. Other threads that try to evict
+them will skip over them due to the pinned flag. Once loaded, the frame is 
+unpinned.
 
 >> B8: Explain how you handle access to paged-out pages that occur
 >> during system calls.  Do you use page faults to bring in pages (as
