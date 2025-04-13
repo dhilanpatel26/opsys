@@ -369,8 +369,9 @@ write_handler (int fd, const void *user_buffer, unsigned length) {
 static int
 close_handler (int fd)
 {
-  // closing stdin or stdout is invalid
-  if (fd < 2 || fd >= FILE_TABLE_SIZE) {
+  // closing stdin or stdout is invalid, as well as an already exited thread
+  if (fd < 2 || fd >= FILE_TABLE_SIZE || thread_current()->fd_table[fd] == NULL) {
+     // printf("Invalid file descriptor\n");
     return -1;
   }
   struct thread *cur = thread_current();

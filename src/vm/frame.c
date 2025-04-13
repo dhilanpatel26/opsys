@@ -198,7 +198,8 @@ static void *
 frame_evict(void) 
 {
 #ifdef USERPROG
-  static struct list_elem *clock_ptr = NULL;
+  // each thread has its own clock pointer to prevent race conditions
+  struct list_elem *clock_ptr = NULL;
   struct frame_entry *f;
   
   /* Scan for a frame to evict */
@@ -304,7 +305,7 @@ frame_evict(void)
     iterations++;
   }
   
-  printf("DEBUG: Eviction failed! Too many pinned frames (%zu/%zu) or locks unavailable\n", 
+  printf("DEBUG: Eviction failed! Too many pinned frames (%d/%zu) or locks unavailable\n", 
          pinned_frames, num_frames);
 #endif
   return NULL; /* Could not evict any frame */

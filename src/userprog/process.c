@@ -287,6 +287,9 @@ process_exit (void)
     procdesc->exited = true;
   }
 
+  /* Don't allow an exiting thread to get pre-empted (even by a duplicate exit call!) */
+  enum intr_level old_level = intr_disable();
+
   sema_up(&procdesc->wait_sema);
 
   struct list_elem *e, *next;
@@ -317,6 +320,7 @@ process_exit (void)
     free(procdesc);
   }
 
+  intr_set_level(old_level);
 }
 
 /* Sets up the CPU for running user code in the current
