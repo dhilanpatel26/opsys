@@ -183,25 +183,64 @@ global frame list.
 >> textbook for an explanation of the necessary conditions for
 >> deadlock.)
 
+
+The necessary conditions for deadlock are:
+1. Mutual exclusion - threads claim exclusive access to resources
+2. Hold and wait - threads hold a resource and wait for another
+3. No preemption - resources cannot be forcibly removed from a thread
+4. Circular wait - threads form a circular chain of waiting resources
+
+The design that we chose is a lock based design to handle synchronization. We utilize a global frame table lock 
+to protect the frame table from race conditions. Additionally, we use page locks
+for each SPT entry to protect individual pages and allow operations on different pages to happen 
+in parallel. We address the necessary conditions for deadlock by:
+
+* only using non-blocking lock aquisition (lock_try_acquire) in our clock algorithm to avoid holding and waiting
+* establishing a global order of lock aquisition (frame table first, then SPT, then swap table) 
+* temporary releasing the lock when waiting for I/O operations to complete in the frame eviction process
+* pinning frames to avoid eviction while a process is holding a page lock
+* releasing locks when circular dependecies could occur (e.g. when a process is evicting a page that another process is waiting for)
+
+
 >> B6: A page fault in process P can cause another process Q's frame
 >> to be evicted.  How do you ensure that Q cannot access or modify
 >> the page during the eviction process?  How do you avoid a race
 >> between P evicting Q's frame and Q faulting the page back in?
+
+We implemented mechanisms to ensure safe eviction. First, when we start the process to evict Q's frame,
+we clear Q's page directory to prevent Q from accessing the page, part of which includes invalidating TLB entries 
+for the mapping. This makes it so that Q will not have access to the page without causing a page fault.
+We use page locks, so that P must acquire the lock for Q's SPT entry before evicting Q's frame.
+We atomically update the SPT entry while the page lock is held. Since P holds both the frame 
+table lock and the page lock, this prevents undesired access to the frame. Once the page is evicted,
+the frame entry is removed from the frame table and Q will need to allocate a new frame if it wants to 
+fault in the page again. These mechanisms ensure that Q can not access or modify the page during
+the eviction process, preventing race conditions.
 
 >> B7: Suppose a page fault in process P causes a page to be read from
 >> the file system or swap.  How do you ensure that a second process Q
 >> cannot interfere by e.g. attempting to evict the frame while it is
 >> still being read in?
 
-Pages being paged in are immediately pinned. Other threads that try to evict
-them will skip over them due to the pinned flag. Once loaded, the frame is 
-unpinned.
+We handle this by pinning the frame as soon as it gets allocated. This happens in the load_page() function.
+When the evicttion process occurs, we explicitly check if a frame is pinned. If it is, we skip it and don't consider it for eviction.
+Once the frame is fully loaded into memory and the page table is updated, we unpin it. This ensures
+the frame is not evicted while being loaded.
+
 
 >> B8: Explain how you handle access to paged-out pages that occur
 >> during system calls.  Do you use page faults to bring in pages (as
 >> in user programs), or do you have a mechanism for "locking" frames
 >> into physical memory, or do you use some other design?  How do you
 >> gracefully handle attempted accesses to invalid virtual addresses?
+
+We handle this by validating all pages before accessing them and using the page fault handler to load the page. 
+We use frame pinning to prevent eviction during the system call and then unpin all frames when the system call 
+is complete. This way, we can ensure all pages required by the system call are loaded into memory before being 
+used. When attempting to access an invalid virtual address, a graceful failure occurs. We return an error code and
+ensure partial writes do not occur. The virtual address is not added to the page table. We make sure to 
+properly validate the address before accessing it, by checking the address range. We also check if the
+address exists in the page table. 
 
 ---- RATIONALE ----
 
@@ -211,6 +250,14 @@ unpinned.
 >> possibility for deadlock but allows for high parallelism.  Explain
 >> where your design falls along this continuum and why you chose to
 >> design it this way.
+
+We chose to implement a sort of hierarchical locking design. We use both a global lock and page specific locks.
+The global lock is used to protect the frame table and the swap table from race conditions. The page specific locks
+protect the STP entries from race conditions. The file system lock protects the file I/O operations from race conditions.
+
+We chose this type of design because it employs a moderate approach that balances parallelism and synchronization.
+This also allows for a manageable amount of complexity with very well-defined locks that have clear purposes. 
+
 
           SURVEY QUESTIONS
           ================
