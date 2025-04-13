@@ -299,9 +299,6 @@ thread_exit (void)
   ASSERT (!intr_context ());
 
 #ifdef USERPROG
-#ifdef VM
-  frame_free_thread_frames(thread_current());
-#endif
   process_exit ();
 #endif
 

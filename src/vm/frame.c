@@ -4,6 +4,7 @@
 #include "threads/synch.h"
 #include <list.h>
 #include <stdio.h>
+#include "threads/interrupt.h"
 
 #ifdef USERPROG
 #include "userprog/pagedir.h"
@@ -197,6 +198,7 @@ frame_allocate(enum palloc_flags flags, struct sup_page_table_entry *spte)
 static void *
 frame_evict(void) 
 {
+  // enum intr_level old_level = intr_disable();
 #ifdef USERPROG
   // each thread has its own clock pointer to prevent race conditions
   struct list_elem *clock_ptr = NULL;
@@ -212,9 +214,27 @@ frame_evict(void)
   while (iterations < 2 * num_frames) {
     if (clock_ptr == NULL || clock_ptr == list_end(&frame_list))
       clock_ptr = list_begin(&frame_list);
+
+    // Validate that the frame is still in the list before dereferencing
+    bool valid_frame = false;
+    struct list_elem *validate_e;
+    
+    for (validate_e = list_begin(&frame_list); validate_e != list_end(&frame_list); 
+        validate_e = list_next(validate_e)) {
+      if (validate_e == clock_ptr) {
+        valid_frame = true;
+        break;
+      }
+    }
+    
+    // Skip if this frame element no longer exists in the list
+    if (!valid_frame) {
+      clock_ptr = list_begin(&frame_list);
+      iterations++;
+      continue;
+    }
       
     f = list_entry(clock_ptr, struct frame_entry, elem);
-    clock_ptr = list_next(clock_ptr);
     
     // printf("DEBUG: Checking frame %p (pinned: %d)\n", f->kpage, f->pinned);
     /* Skip pinned frames */
@@ -222,6 +242,7 @@ frame_evict(void)
       // printf("DEBUG: Skipping pinned frame %p\n", f->kpage);
       /* Still count this as an iteration */
       iterations++;
+      clock_ptr = list_next(clock_ptr);
       continue;
     }
       
@@ -231,6 +252,7 @@ frame_evict(void)
       /* Skip if we can't get the lock without blocking */
       // printf("DEBUG: Skipping frame %p - could not acquire lock\n", f->kpage);
       /* Don't count as an iteration? */
+      clock_ptr = list_next(clock_ptr);
       continue;
     }
       
@@ -255,6 +277,7 @@ frame_evict(void)
           // printf("DEBUG: Cannot evict frame %p - swap not available\n", kpage);
           lock_release(&f->spte->page_lock);
           iterations++;
+          clock_ptr = list_next(clock_ptr);
           continue; // Skip this frame, can't swap
         }
 
@@ -264,15 +287,45 @@ frame_evict(void)
         f->pinned = true;
         pinned_frames++;
 
+        /* Save critical values locally before releasing lock */
+        void *local_kpage = kpage;
+        struct sup_page_table_entry *local_spte = f->spte;
+
         /* Temporarily release frame table lock during I/O for parallelism */
+        // intr_enable();
         lock_release(&frame_table_lock);
         
         /* Still holding page_lock */
-        f->spte->swap_index = swap_out(kpage);
-        f->spte->status = IN_SWAP;
-        
+        swap_index_t swap_idx = swap_out(local_kpage);
+              
         /* Reacquire frame table lock */
         lock_acquire(&frame_table_lock);
+        // intr_disable();
+
+        /* Verify frame still exists and is valid */
+        bool frame_still_valid = false;
+        struct list_elem *e;
+        for (e = list_begin(&frame_list); e != list_end(&frame_list); e = list_next(e)) {
+          struct frame_entry *check_f = list_entry(e, struct frame_entry, elem);
+          if (check_f == f && check_f->kpage == local_kpage) {
+            frame_still_valid = true;
+            break;
+          }
+        }
+        
+        if (!frame_still_valid) {
+          /* Frame was removed while we were swapping - abort this eviction */
+          // printf("DEBUG: Frame was invalidated during swap I/O\n");
+          lock_release(&local_spte->page_lock);
+          clock_ptr = list_next(clock_ptr);
+          iterations++;
+          continue;
+        }
+        
+        /* Safe to update frame now */
+        f->spte->swap_index = swap_idx;
+        f->spte->status = IN_SWAP;
+
       } else if (f->spte->source == SOURCE_FILE) {
         /* Clean page from file, just update status */
         // printf("DEBUG: Clean frame %p from file, no need to write back\n", kpage);
@@ -297,10 +350,13 @@ frame_evict(void)
       
       /* Free the frame entry but not the physical page, will reuse! */
       free(f);
+
+      // intr_set_level(old_level);
       
       // printf("DEBUG: Successfully evicted frame %p\n", kpage);
       return kpage; /* Reusing physical address of frame (translated to kernel vaddr here) */
     }
+    clock_ptr = list_next(clock_ptr);
     
     iterations++;
   }
@@ -308,6 +364,9 @@ frame_evict(void)
   printf("DEBUG: Eviction failed! Too many pinned frames (%d/%zu) or locks unavailable\n", 
          pinned_frames, num_frames);
 #endif
+
+  // intr_set_level(old_level);
+  
   return NULL; /* Could not evict any frame */
 }
 
@@ -435,11 +494,15 @@ void frame_free_thread_frames(struct thread *t) {
       struct list_elem *next = list_next(e);
       
       if (f->owner == t) {
+        if (f->pinned) {
+          f->pinned = false;
+          pinned_frames--;
+        }
           // don't free the virtual page, that gets handled in process_exit
           list_remove(&f->elem);
           free(f);
           total_frames--;
-          if (f->pinned) pinned_frames--;
+          
       }
 
       e = next;

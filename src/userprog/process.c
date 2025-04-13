@@ -242,6 +242,16 @@ process_exit (void)
 {
   struct thread *cur = thread_current ();
   uint32_t *pdir;
+  static struct lock exit_lock;
+  static bool exit_lock_init = false;
+
+  if (!exit_lock_init) {
+    lock_init(&exit_lock);
+    exit_lock_init = true;
+  }
+
+
+  lock_acquire(&exit_lock);
 
   if (cur->executable != NULL) {
     lock_acquire(&filesys_lock);
@@ -250,6 +260,10 @@ process_exit (void)
     lock_release(&filesys_lock);
     cur->executable = NULL;
   }
+
+#ifdef VM
+  frame_free_thread_frames(thread_current());
+#endif
 
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
@@ -321,6 +335,8 @@ process_exit (void)
   }
 
   intr_set_level(old_level);
+
+  lock_release(&exit_lock);
 }
 
 /* Sets up the CPU for running user code in the current
