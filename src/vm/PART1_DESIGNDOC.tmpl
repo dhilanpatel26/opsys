@@ -17,6 +17,9 @@ Katherine Forbes <kforbes6@jhu.edu>
 >> If you have any preliminary comments on your submission, notes for the
 >> TAs, or extra credit, please give them here.
 
+We attempted to implement the shared pages extra credit on a separate branch,
+but had trouble testing it. 
+
 >> Please cite any offline or online sources you consulted while
 >> preparing your submission, other than the Pintos documentation, course
 >> text, lecture notes, and course staff.
@@ -191,11 +194,13 @@ The necessary conditions for deadlock are:
 4. Circular wait - threads form a circular chain of waiting resources
 
 The design that we chose is a lock based design to handle synchronization. We utilize a global frame table lock 
-to protect the frame table from race conditions. Additionally, we use page locks
+to protect the frame table from race condition--additionally, we use page locks
 for each SPT entry to protect individual pages and allow operations on different pages to happen 
-in parallel. We address the necessary conditions for deadlock by:
+in parallel. All of the locks are acquired in a defined order to prevent deadlock.
 
-* only using non-blocking lock aquisition (lock_try_acquire) in our clock algorithm to avoid holding and waiting
+We address the necessary conditions for deadlock by:
+
+* only using non-blocking lock aquisition (lock_try_acquire) in our eviction process to avoid holding and waiting
 * establishing a global order of lock aquisition (frame table first, then SPT, then swap table) 
 * temporary releasing the lock when waiting for I/O operations to complete in the frame eviction process
 * pinning frames to avoid eviction while a process is holding a page lock
@@ -253,12 +258,15 @@ address exists in the page table.
 
 We chose to implement a sort of hierarchical locking design. We use both a global lock and page specific locks.
 The global lock is used to protect the frame table and the swap table from race conditions. The page specific locks
-protect the STP entries from race conditions. The file system lock protects the file I/O operations from race conditions.
+protect the STP entries. The file system lock protects the file I/O operations from race conditions.
 
 We chose this type of design because it employs a middle-of-the-road approach that balances parallelism and synchronization.
 This also allows for a manageable amount of complexity with very well-defined locks that have clear purposes. With
 the design that we chose, we can have concurrent page faults among processes and parallel I/O operations. We still
-avoid deadlocks with non-blocking lock aquisition and a strict locking order (frame table, then page, then filesys). 
+avoid deadlocks with non-blocking lock aquisition and a defined locking order (frame table, then page, then filesys). 
+We found that this design was the most effective for our implementation. The most important thing was 
+to have more than just one lock in place, as that would have greatly reduced the performance and parallelism 
+of our implementation..
 
 
           SURVEY QUESTIONS
