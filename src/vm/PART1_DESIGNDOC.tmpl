@@ -255,8 +255,10 @@ We chose to implement a sort of hierarchical locking design. We use both a globa
 The global lock is used to protect the frame table and the swap table from race conditions. The page specific locks
 protect the STP entries from race conditions. The file system lock protects the file I/O operations from race conditions.
 
-We chose this type of design because it employs a moderate approach that balances parallelism and synchronization.
-This also allows for a manageable amount of complexity with very well-defined locks that have clear purposes. 
+We chose this type of design because it employs a middle-of-the-road approach that balances parallelism and synchronization.
+This also allows for a manageable amount of complexity with very well-defined locks that have clear purposes. With
+the design that we chose, we can have concurrent page faults among processes and parallel I/O operations. We still
+avoid deadlocks with non-blocking lock aquisition and a strict locking order (frame table, then page, then filesys). 
 
 
           SURVEY QUESTIONS
