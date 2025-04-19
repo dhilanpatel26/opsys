@@ -18,6 +18,7 @@
 #include "devices/shutdown.h"
 #include "vm/frame.h"
 #include "threads/malloc.h"
+#include "vm/page.h"
 
 static void syscall_handler (struct intr_frame *);
 static int wait_handler (int pid);
@@ -54,7 +55,9 @@ syscall_handler (struct intr_frame *f)
 
   // relevant stack data is 4 bytes and aligned
   int *esp = f->esp; // user virtual memory
-
+  #ifdef VM
+    thread_current()->esp = f->esp;
+  #endif
   int syscall_number = *(int*) translate_uvaddr(esp);
   translate_uvaddr((void*)((char*)esp + 3)); // ensure entire syscall number is valid
 
@@ -511,22 +514,34 @@ read_handler(int fd, void *user_buffer, unsigned length) {
   // Loop through all pages from start to end inclusive
   for (void *page_addr = start_addr; page_addr <= end_addr; page_addr += PGSIZE) {
     struct sup_page_table_entry *spte = 
-      sup_page_table_lookup(&thread_current()->spt, page_addr);
-
+        sup_page_table_lookup(&thread_current()->spt, page_addr);
     /* Read buffers don't need to be allocated a frame but they
        do need a SPT entry -- SPTEs should only be created at load. */
     if (spte == NULL) {
-      exit_handler(-1);
-      NOT_REACHED();
+      if (valid_stack_access(page_addr, thread_current()->esp)) {
+        spte = malloc(sizeof *spte);
+        if (spte == NULL) exit_handler(-1);
+        spte->vaddr = page_addr;
+        spte->writable = true;
+        spte->status = NOT_LOADED;
+        spte->source = SOURCE_ZERO;
+        lock_init(&spte->page_lock);
+        if (!sup_page_table_insert(&thread_current()->spt, spte)) {
+          free(spte);
+          exit_handler(-1);
+        }
+      } else {
+        exit_handler(-1);
+        NOT_REACHED();
+      }
     }
-    
+
     // Force load the page before validation
     lock_acquire(&spte->page_lock);
     if (spte->status != IN_MEMORY) {
       bool success = load_page(spte);
       if (!success) {
         lock_release(&spte->page_lock);
-        printf("Failed to load page\n");
         exit_handler(-1);
         NOT_REACHED();
       }
@@ -688,18 +703,32 @@ translate_uvaddr(void *uptr) {
   }
   
   void *kptr = pagedir_get_page(thread_current()->pagedir, uptr);
-  if (kptr == NULL) {
+    if (kptr == NULL) {
     #ifdef VM
-    // To confirm: these are user virtual addresses because we have a
-    // SPT for each user process
-    // what's the deal with the kernel?
+    void *page_addr = pg_round_down(uptr);
     struct sup_page_table_entry *spte = 
-      sup_page_table_lookup(&thread_current()->spt, pg_round_down(uptr));
-      if (spte == NULL) {
-        exit_handler(-1); // invalid memory access, segfault
-        NOT_REACHED();
+      sup_page_table_lookup(&thread_current()->spt, page_addr);
+
+    if (spte == NULL) {
+      // try to grow stack
+      if (valid_stack_access(uptr, thread_current()->esp)) {
+        spte = malloc(sizeof *spte);
+        if (spte == NULL) exit_handler(-1);
+        spte->vaddr = page_addr;
+        spte->writable = true;
+        spte->status = NOT_LOADED;
+        spte->source = SOURCE_ZERO;
+        lock_init(&spte->page_lock);
+        if (!sup_page_table_insert(&thread_current()->spt, spte)) {
+          free(spte);
+          exit_handler(-1);
+        }
+      } else {
+        exit_handler(-1);
       }
-      return uptr; // will cause page fault when accessed
+    }
+
+    return uptr; // let it page fault
     #else
     exit_handler(-1); // invalid memory access, segfault
     NOT_REACHED();
@@ -709,7 +738,7 @@ translate_uvaddr(void *uptr) {
   // accesses the kernel virtual address
   // special bits only get set in the kernel page table
 
-  return kptr; 
+  return kptr;
 }
 
 static void

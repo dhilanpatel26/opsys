@@ -22,7 +22,7 @@ static long long page_fault_cnt;
 
 static void kill (struct intr_frame *);
 static void page_fault (struct intr_frame *);
-static bool valid_stack_access(void *fault_addr, void *esp);
+bool valid_stack_access(void *fault_addr, void *esp);
 
 /* Registers handlers for interrupts that can be caused by user
    programs.
@@ -148,6 +148,9 @@ page_fault (struct intr_frame *f)
      [IA32-v3a] 5.15 "Interrupt 14--Page Fault Exception
      (#PF)". */
   asm ("movl %%cr2, %0" : "=r" (fault_addr));
+  #ifdef VM
+  thread_current()->esp = f->esp;
+  #endif
 
 //   #ifdef VM
 //    printf("Registers: eax=%08x, ebx=%08x, ecx=%08x, edx=%08x, eip=%08x, ebp=%08x, esp=%08x\n", 
@@ -269,7 +272,7 @@ page_fault (struct intr_frame *f)
   }
 }
 
-static bool
+bool
 valid_stack_access(void *fault_addr, void *esp) {
     return is_user_vaddr(fault_addr) &&
            fault_addr >= esp - 32 &&
