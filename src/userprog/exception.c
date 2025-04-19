@@ -5,6 +5,8 @@
 #include "threads/interrupt.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
+#include "userprog/syscall.h"
+#include "threads/malloc.h"
 
 #ifdef USERPROG
 #include "userprog/pagedir.h"
@@ -13,12 +15,14 @@
 #ifdef VM
 #include "vm/page.h"
 #endif
+#define MAX_STACK_SIZE (8 * 1024 * 1024)
 
 /* Number of page faults processed. */
 static long long page_fault_cnt;
 
 static void kill (struct intr_frame *);
 static void page_fault (struct intr_frame *);
+static bool valid_stack_access(void *fault_addr, void *esp);
 
 /* Registers handlers for interrupts that can be caused by user
    programs.
@@ -212,9 +216,36 @@ page_fault (struct intr_frame *f)
             return;
          
       } else {
-         /* Invalid access */
+         
          lock_release(&spte->page_lock);
       }
+   }
+   else if (user && valid_stack_access(fault_addr, f->esp)) {
+    struct sup_page_table_entry *new_spte =
+        malloc(sizeof *new_spte);
+      if (new_spte == NULL) {
+         thread_exit(); //out of memory 
+         NOT_REACHED();
+      }
+      new_spte->vaddr = page_addr;
+      new_spte->writable = true;
+      new_spte->status = NOT_LOADED;
+      new_spte->source = SOURCE_ZERO;
+      lock_init(&new_spte->page_lock);
+      if (!sup_page_table_insert(&thread_current()->spt, new_spte)) {
+         free(new_spte);
+         thread_exit(); //insertion failed
+         NOT_REACHED();
+      }
+      lock_acquire(&new_spte->page_lock);
+      if (!load_page(new_spte)) {
+         lock_release(&new_spte->page_lock);
+         free(new_spte);
+         thread_exit(); //loading failed
+         NOT_REACHED();
+      }
+      lock_release(&new_spte->page_lock);
+      return;
    }
   }
 #endif
@@ -238,3 +269,9 @@ page_fault (struct intr_frame *f)
   }
 }
 
+static bool
+valid_stack_access(void *fault_addr, void *esp) {
+    return is_user_vaddr(fault_addr) &&
+           fault_addr >= esp - 32 &&
+           fault_addr >= PHYS_BASE - MAX_STACK_SIZE;
+}
