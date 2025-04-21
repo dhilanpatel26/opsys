@@ -336,6 +336,9 @@ process_exit (void)
 
   intr_set_level(old_level);
 
+  /* Add before other cleanup */
+  mmap_remove_all();
+
   lock_release(&exit_lock);
 }
 
@@ -702,123 +705,6 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
   return true;
 }
 
-// static bool
-// setup_stack_args_helper (void **esp, const char *file_name) 
-// {
-//   char *fn_copy = palloc_get_page(0);
-//   if (fn_copy == NULL) {
-//     return false;
-//   }
-
-//   strlcpy(fn_copy, file_name, PGSIZE);
-
-//   char *token;
-//   char *save_ptr;
-
-//   int argc = 0;
-//   char *argv[32];
-
-//   // Collect all arguments
-//   for (token = strtok_r(fn_copy, " ", &save_ptr); token != NULL; 
-//        token = strtok_r(NULL, " ", &save_ptr)) {
-//     if (argc >= 32) {
-//       palloc_free_page(fn_copy);
-//       return false;
-//     }
-    
-//     // Safety check: make sure token is valid
-//     if (token == NULL || strlen(token) == 0) {
-//       argv[argc] = "";  // Use empty string instead of NULL
-//     } else {
-//       argv[argc] = token;
-//     }
-    
-//     argc++;
-//   }
-
-//   // the total size needed for the strings
-//   size_t total_size = 0;
-//   for (int i = 0; i < argc; i++) {
-//     // Safety check: ensure argv[i] is valid
-//     if (argv[i] == NULL) {
-//       argv[i] = "";  // Replace NULL with empty string
-//     }
-//     total_size += strlen(argv[i]) + 1;
-//   }
-
-//   // Rest of size calculations
-//   total_size += 4 * (argc + 1);  // argv pointers + null sentinel
-//   total_size += 4;               // argv
-//   total_size += 4;               // argc
-//   total_size += 4;               // return address
-//   total_size += total_size % 4;  // alignment padding
-
-//   // Check against page size
-//   if (total_size > PGSIZE) {
-//       palloc_free_page(fn_copy);
-//       return false;
-//   }
-
-//   // Align stack pointer
-//   *esp = (void*)((unsigned int)(*esp) & ~3);
-
-//   // Copy strings to stack
-//   char *arg_addrs[argc];
-//   for (int i = argc - 1; i >= 0; i--) {
-//     // Safety check: ensure argv[i] is valid before using
-//     if (argv[i] == NULL || strlen(argv[i]) == 0) {
-//       // Push an empty string
-//       *esp -= 1;
-//       *(char*)*esp = '\0';
-//       arg_addrs[i] = *esp;
-//     } else {
-//       size_t len = strlen(argv[i]) + 1;
-//       *esp -= len;
-//       strlcpy(*esp, argv[i], len);
-//       arg_addrs[i] = *esp;
-//     }
-//   }
-
-//   // Word-align for better performance
-//   *esp = (void*)((unsigned int)(*esp) & ~3);
-
-//   // Push NULL sentinel for argv[]
-//   *esp -= 4;
-//   *(char**)*esp = NULL;
-
-//   // Push argument addresses (argv[argc-1] down to argv[0])
-//   for (int i = argc - 1; i >= 0; i--) {
-//     *esp -= 4;
-//     // Verify arg_addrs[i] is valid before pushing
-//     if (arg_addrs[i] == NULL) {
-//       // This should never happen with our safety checks above
-//       *(char**)*esp = "";  // Empty string is safer than NULL
-//     } else {
-//       *(char**)*esp = arg_addrs[i];
-//     }
-//   }
-
-//   // Push argv (address of argv[0])
-//   char **argv_addr = *esp;
-//   *esp -= 4;
-//   *(char***)*esp = argv_addr;
-
-//   // Push argc
-//   *esp -= 4;
-//   *(int*)*esp = argc;
-
-//   // Push fake return address
-//   *esp -= 4;
-//   *(void**)*esp = (void*)0xffffffff;
-
-//   palloc_free_page(fn_copy);
-
-//   // Debug: print stack contents
-//   hex_dump((uintptr_t)*esp, *esp, PHYS_BASE - *esp, true);
-
-//   return true;
-// }
-
 static bool
 setup_stack_args_helper (void **esp, const char *file_name) 
 {
@@ -917,9 +803,6 @@ setup_stack_args_helper (void **esp, const char *file_name)
 
   return true;
 }
-
-
-
 
 /* Create a minimal stack by mapping a zeroed page at the top of
    user virtual memory. */

@@ -19,6 +19,8 @@
 #include "vm/frame.h"
 #include "threads/malloc.h"
 #include "vm/page.h"
+#include "vm/mmap.h"
+#define MAX_STACK_SIZE (8 * 1024 * 1024)  /* 8 MB stack */
 
 static void syscall_handler (struct intr_frame *);
 static int wait_handler (int pid);
@@ -36,6 +38,9 @@ static void seek_handler(int fd, unsigned position);
 static unsigned tell_handler(int fd);
 static int write_handler (int fd, const void *buffer, unsigned length);
 static bool validate_buffer (const void *buffer, unsigned length);
+static mapid_t mmap_handler(int fd, void *addr);
+static void munmap_handler(mapid_t mapping);
+static struct file *get_file(int fd);
 
 struct lock filesys_lock; // filesys code is a critical section
 
@@ -168,6 +173,20 @@ syscall_handler (struct intr_frame *f)
       NOT_REACHED();
       return;
     }
+    #ifdef VM
+    case SYS_MMAP: {
+      int fd = *(int *)(f->esp + 4);
+      void *addr = *(void **)(f->esp + 8);
+      f->eax = mmap_handler(fd, addr);
+      return;
+    }
+    case SYS_MUNMAP: {
+      mapid_t mapping = *(mapid_t *)(f->esp + 4);
+      munmap_handler(mapping);
+      return;
+    }
+    #endif
+
     default:
       NOT_REACHED();
   }
@@ -755,4 +774,139 @@ exit_handler (int status)
   
   // process cleanup handled by implicit process_exit
   thread_exit();
+}
+
+// Memory mapping system calls
+static mapid_t
+mmap_handler(int fd, void *addr)
+{
+  // validate arguments
+  if (fd <= 1 || addr == NULL || pg_ofs(addr) != 0 || addr == 0)
+    return -1;
+    
+  // get file from file descriptor
+  struct file *file = get_file(fd);
+  if (file == NULL)
+    return -1;
+    
+  // get file size
+  lock_acquire(&filesys_lock);
+  off_t file_size = file_length(file);
+  lock_release(&filesys_lock);
+  
+  // check file size
+  if (file_size == 0)
+    return -1;
+    
+  // calculate number of pages needed
+  size_t page_count = (file_size + PGSIZE - 1) / PGSIZE;
+  
+  // check for overlap with existing pages
+  void *check_addr = addr;
+  for (size_t i = 0; i < page_count; i++, check_addr += PGSIZE)
+  {
+    // check if address is already mapped
+    if (sup_page_table_lookup(&thread_current()->spt, check_addr) != NULL)
+      return -1;
+      
+    // check if address is in stack region
+    if (check_addr >= PHYS_BASE - MAX_STACK_SIZE && check_addr < PHYS_BASE)
+      return -1;
+  }
+  
+  // reopen file to get independent reference
+  lock_acquire(&filesys_lock);
+  struct file *reopened_file = file_reopen(file);
+  lock_release(&filesys_lock);
+  
+  if (reopened_file == NULL)
+    return -1;
+    
+  // add pages to supplemental page table
+  void *page_addr = addr;
+  off_t ofs = 0;
+  
+  for (size_t i = 0; i < page_count; i++, page_addr += PGSIZE, ofs += PGSIZE)
+  {
+    // calculate read bytes for this page
+    uint32_t read_bytes = (i == page_count - 1 && file_size % PGSIZE != 0) 
+                         ? file_size % PGSIZE : PGSIZE;
+    uint32_t zero_bytes = PGSIZE - read_bytes;
+    
+    /* Create and initialize SPTE */
+    struct sup_page_table_entry *spte = malloc(sizeof(struct sup_page_table_entry));
+    if (spte == NULL) {
+      /* Clean up on failure */
+      if (reopened_file != NULL)
+        file_close(reopened_file);
+      return -1;
+    }
+    
+    spte->vaddr = page_addr;
+    spte->writable = true;
+    spte->status = IN_FILESYS;
+    spte->source = SOURCE_FILE;
+    lock_init(&spte->page_lock);
+    spte->file = reopened_file;  /* Each page gets its own file reference */
+    spte->file_offset = ofs;
+    spte->read_bytes = read_bytes;
+    spte->zero_bytes = zero_bytes;
+    
+    /* Insert into SPT */
+    if (!sup_page_table_insert(&thread_current()->spt, spte)) {
+      /* Clean up on failure */
+      if (spte->file != NULL)
+        file_close(spte->file);
+      free(spte);
+      
+      /* Clean up previously added pages */
+      if (reopened_file != NULL)
+        file_close(reopened_file);
+      return -1;
+    }
+  }
+  
+  // add mapping to mmap list
+  mapid_t mapid = mmap_add(reopened_file, addr, page_count);
+  if (mapid == -1)
+  {
+    // clean up on failure
+    lock_acquire(&filesys_lock);
+    file_close(reopened_file);
+    lock_release(&filesys_lock);
+    
+    // remove pages from supplemental page table
+    void *cleanup_addr = addr;
+    struct sup_page_table_entry *spte;
+
+    for (size_t i = 0; i < page_count; i++, cleanup_addr += PGSIZE) {
+      spte = sup_page_table_lookup(&thread_current()->spt, cleanup_addr);
+      if (spte != NULL) {
+        hash_delete(&thread_current()->spt, &spte->hash_elem);
+        spt_entry_free(&spte->hash_elem, NULL);  // Pass NULL as the second argument
+      }
+    }
+  }
+  
+  return mapid;
+}
+
+static void
+munmap_handler(mapid_t mapping)
+{
+  // validate mapping
+  if (mapping <= 0)
+    return;
+    
+  // remove mapping
+  mmap_remove(mapping);
+}
+
+static struct file *
+get_file(int fd)
+{
+  if (fd < 0 || fd >= FILE_TABLE_SIZE)
+    return NULL;
+    
+  return thread_current()->fd_table[fd];
 }

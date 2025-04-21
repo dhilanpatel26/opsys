@@ -54,4 +54,5 @@ unsigned sup_page_table_hash(const struct hash_elem *e, void *aux);
 bool sup_page_table_less(const struct hash_elem *a, 
                          const struct hash_elem *b, void *aux);
 bool valid_stack_access(void *fault_addr, void *esp);
+void spt_entry_free(struct hash_elem *e, void *aux);
 #endif

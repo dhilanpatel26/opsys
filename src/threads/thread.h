@@ -10,6 +10,7 @@
 
 #ifdef VM
 #include "vm/page.h"
+#include "vm/mmap.h"
 #endif
 
 /* States in a thread's life cycle. */
@@ -117,6 +118,10 @@ struct thread
 
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */
+
+    /* Memory mapped files */
+    struct list mmap_list;        /* List of memory mapped files */
+    mapid_t next_mapid;           /* Next mapping ID to assign */
   };
 
 /* If false (default), use round-robin scheduler.

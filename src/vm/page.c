@@ -10,7 +10,6 @@
 #include "userprog/pagedir.h"
 #endif
 extern struct lock filesys_lock;
-static void spt_entry_free(struct hash_elem *e, void *aux UNUSED);
 
 /* Initialize a supplemental page table */
 void
@@ -162,7 +161,7 @@ sup_page_table_less(const struct hash_elem *a, const struct hash_elem *b, void *
 }
 
 /* Frees an SPT entry */
-static void
+void
 spt_entry_free(struct hash_elem *e, void *aux UNUSED)
 {
   struct sup_page_table_entry *spte = hash_entry(e, struct sup_page_table_entry, hash_elem);

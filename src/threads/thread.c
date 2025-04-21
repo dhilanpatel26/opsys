@@ -15,6 +15,8 @@
 #include "userprog/process.h"
 #ifdef VM
 #include "vm/frame.h"
+#include "vm/mmap.h"
+#include "vm/page.h"
 #endif
 #endif
 
@@ -213,6 +215,11 @@ thread_create (const char *name, int priority,
   sf = alloc_frame (t, sizeof *sf);
   sf->eip = switch_entry;
   sf->ebp = 0;
+
+  /* Add after other initializations, before returning the tid */
+  #ifdef VM
+    mmap_init(t);
+  #endif
 
   /* Add to run queue. */
   thread_unblock (t);
