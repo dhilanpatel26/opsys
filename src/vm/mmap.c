@@ -74,42 +74,45 @@ mmap_remove(mapid_t mapid)
   void *addr = me->addr;
   struct thread *t = thread_current();
   
-  for (size_t i = 0; i < me->page_count; i++, addr += PGSIZE)
-  {
-    struct sup_page_table_entry *spte = sup_page_table_lookup(&t->spt, addr);
-    if (spte != NULL && spte->status == IN_MEMORY)
+  // check if page dir exists first
+  if (t->pagedir != NULL) {
+    for (size_t i = 0; i < me->page_count; i++, addr += PGSIZE)
     {
-      void *kpage = pagedir_get_page(t->pagedir, addr);
-      if (kpage != NULL)
-      {
-        // if page is dirty, write back to file
-        if (pagedir_is_dirty(t->pagedir, addr))
+        struct sup_page_table_entry *spte = sup_page_table_lookup(&t->spt, addr);
+        if (spte != NULL && spte->status == IN_MEMORY)
         {
-          lock_acquire(&filesys_lock);
-          file_seek(me->file, i * PGSIZE);
-          // only write up to file size for the last page
-          off_t bytes_to_write = PGSIZE;
-          if (i == me->page_count - 1)
-          {
-            off_t file_size = file_length(me->file);
-            off_t bytes_in_last_page = file_size % PGSIZE;
-            if (bytes_in_last_page > 0)
-              bytes_to_write = bytes_in_last_page;
-          }
-          file_write(me->file, kpage, bytes_to_write);
-          lock_release(&filesys_lock);
+        void *kpage = pagedir_get_page(t->pagedir, addr);
+        if (kpage != NULL)
+        {
+            // if page is dirty, write back to file
+            if (pagedir_is_dirty(t->pagedir, addr))
+            {
+            lock_acquire(&filesys_lock);
+            file_seek(me->file, i * PGSIZE);
+            // only write up to file size for the last page
+            off_t bytes_to_write = PGSIZE;
+            if (i == me->page_count - 1)
+            {
+                off_t file_size = file_length(me->file);
+                off_t bytes_in_last_page = file_size % PGSIZE;
+                if (bytes_in_last_page > 0)
+                bytes_to_write = bytes_in_last_page;
+            }
+            file_write(me->file, kpage, bytes_to_write);
+            lock_release(&filesys_lock);
+            }
+            
+            // remove page from page table
+            pagedir_clear_page(t->pagedir, addr);
+            frame_free(kpage);
+        }
         }
         
-        // remove page from page table
-        pagedir_clear_page(t->pagedir, addr);
-        frame_free(kpage);
-      }
-    }
-    
-    // remove from supplemental page table
-    if (spte != NULL) {
-      hash_delete(&t->spt, &spte->hash_elem);
-      spt_entry_free(&spte->hash_elem, NULL);
+        // remove from supplemental page table
+        if (spte != NULL) {
+        hash_delete(&t->spt, &spte->hash_elem);
+        spt_entry_free(&spte->hash_elem, NULL);
+        }
     }
   }
   

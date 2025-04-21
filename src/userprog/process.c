@@ -265,6 +265,9 @@ process_exit (void)
   frame_free_thread_frames(thread_current());
 #endif
 
+  /* Add before other cleanup */
+  mmap_remove_all();
+
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
   pdir = cur->pagedir;
@@ -336,8 +339,7 @@ process_exit (void)
 
   intr_set_level(old_level);
 
-  /* Add before other cleanup */
-  mmap_remove_all();
+
 
   lock_release(&exit_lock);
 }
