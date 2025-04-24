@@ -168,8 +168,11 @@ spt_entry_free(struct hash_elem *e, void *aux UNUSED)
   
 #ifdef USERPROG
   /* Close any open files */
-  if (spte->status == IN_FILESYS && spte->file != NULL)
+  if (spte->status == IN_FILESYS && spte->file != NULL) {
+    lock_acquire(&filesys_lock);
     file_close(spte->file);
+    lock_release(&filesys_lock);
+  }
     
   /* Free any swap slots */
   if (spte->status == IN_SWAP)

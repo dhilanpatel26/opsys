@@ -9,6 +9,7 @@
 #include "filesys/file.h"
 #include <stdio.h>
 
+#ifdef VM
 /* Add this line */
 extern struct lock filesys_lock;
 
@@ -101,7 +102,7 @@ mmap_remove(mapid_t mapid)
             file_write(me->file, kpage, bytes_to_write);
             lock_release(&filesys_lock);
             }
-            
+
             // remove page from page table
             pagedir_clear_page(t->pagedir, addr);
             frame_free(kpage);
@@ -117,7 +118,9 @@ mmap_remove(mapid_t mapid)
   }
   
   // close file and free mmap entry
+  lock_acquire(&filesys_lock);
   file_close(me->file);
+  lock_release(&filesys_lock);
   free(me);
   
   return true;
@@ -137,3 +140,4 @@ mmap_remove_all(void)
     mmap_remove(me->mapid);
   }
 }
+#endif // VM

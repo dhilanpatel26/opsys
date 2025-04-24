@@ -19,8 +19,11 @@
 #include "vm/frame.h"
 #include "threads/malloc.h"
 #include "vm/page.h"
+
+#ifdef VM
 #include "vm/mmap.h"
 #define MAX_STACK_SIZE (8 * 1024 * 1024)  /* 8 MB stack */
+#endif
 
 static void syscall_handler (struct intr_frame *);
 static int wait_handler (int pid);
@@ -38,8 +41,12 @@ static void seek_handler(int fd, unsigned position);
 static unsigned tell_handler(int fd);
 static int write_handler (int fd, const void *buffer, unsigned length);
 static bool validate_buffer (const void *buffer, unsigned length);
+
+#ifdef VM
 static mapid_t mmap_handler(int fd, void *addr);
 static void munmap_handler(mapid_t mapping);
+#endif
+
 static struct file *get_file(int fd);
 
 struct lock filesys_lock; // filesys code is a critical section
@@ -175,13 +182,16 @@ syscall_handler (struct intr_frame *f)
     }
     #ifdef VM
     case SYS_MMAP: {
-      int fd = *(int *)(f->esp + 4);
-      void *addr = *(void **)(f->esp + 8);
+      int fd = *(int *) translate_uvaddr(esp + 1);
+      translate_uvaddr((void*)((char*)esp + 7));
+      void *addr = *(void **) translate_uvaddr(esp + 2);
+      translate_uvaddr((void*)((char*)esp + 11));
       f->eax = mmap_handler(fd, addr);
       return;
     }
     case SYS_MUNMAP: {
-      mapid_t mapping = *(mapid_t *)(f->esp + 4);
+      mapid_t mapping = *(mapid_t *) translate_uvaddr(esp + 1);
+      translate_uvaddr((void*)((char*)esp + 7));
       munmap_handler(mapping);
       return;
     }
@@ -712,11 +722,13 @@ validate_string(const char *str) {
 static void *
 translate_uvaddr(void *uptr) {
   if (uptr == NULL || !is_user_vaddr(uptr)) {
+    // printf("Invalid user virtual address (1): %p\n", uptr);
     exit_handler(-1); // invalid memory access, segfault
     NOT_REACHED();
   }
 
   if (get_user((uint8_t*) uptr) == -1) {
+    // printf("Invalid user virtual address (2): %p\n", uptr);
     exit_handler(-1); // invalid memory access, segfault
     NOT_REACHED();
   }
@@ -776,6 +788,7 @@ exit_handler (int status)
   thread_exit();
 }
 
+#ifdef VM
 // Memory mapping system calls
 static mapid_t
 mmap_handler(int fd, void *addr)
@@ -813,14 +826,6 @@ mmap_handler(int fd, void *addr)
     if (check_addr >= PHYS_BASE - MAX_STACK_SIZE && check_addr < PHYS_BASE)
       return -1;
   }
-  
-  // reopen file to get independent reference
-  lock_acquire(&filesys_lock);
-  struct file *reopened_file = file_reopen(file);
-  lock_release(&filesys_lock);
-  
-  if (reopened_file == NULL)
-    return -1;
     
   // add pages to supplemental page table
   void *page_addr = addr;
@@ -837,8 +842,6 @@ mmap_handler(int fd, void *addr)
     struct sup_page_table_entry *spte = malloc(sizeof(struct sup_page_table_entry));
     if (spte == NULL) {
       /* Clean up on failure */
-      if (reopened_file != NULL)
-        file_close(reopened_file);
       return -1;
     }
     
@@ -847,7 +850,11 @@ mmap_handler(int fd, void *addr)
     spte->status = IN_FILESYS;
     spte->source = SOURCE_FILE;
     lock_init(&spte->page_lock);
-    spte->file = reopened_file;  /* Each page gets its own file reference */
+
+    lock_acquire(&filesys_lock);
+    spte->file = file_reopen(file);  /* Each page gets its own file reference */
+    lock_release(&filesys_lock);
+
     spte->file_offset = ofs;
     spte->read_bytes = read_bytes;
     spte->zero_bytes = zero_bytes;
@@ -855,25 +862,28 @@ mmap_handler(int fd, void *addr)
     /* Insert into SPT */
     if (!sup_page_table_insert(&thread_current()->spt, spte)) {
       /* Clean up on failure */
-      if (spte->file != NULL)
+      if (spte->file != NULL) {
+        lock_acquire(&filesys_lock);
         file_close(spte->file);
+        lock_release(&filesys_lock);
+      }
       free(spte);
       
-      /* Clean up previously added pages */
-      if (reopened_file != NULL)
-        file_close(reopened_file);
-      return -1;
     }
   }
+
+  lock_acquire(&filesys_lock);
+  struct file *reopened_file = file_reopen(file);
+  lock_release(&filesys_lock);
   
   // add mapping to mmap list
   mapid_t mapid = mmap_add(reopened_file, addr, page_count);
   if (mapid == -1)
   {
     // clean up on failure
-    lock_acquire(&filesys_lock);
-    file_close(reopened_file);
-    lock_release(&filesys_lock);
+    // lock_acquire(&filesys_lock);
+    // file_close(reopened_file);
+    // lock_release(&filesys_lock);
     
     // remove pages from supplemental page table
     void *cleanup_addr = addr;
@@ -886,6 +896,11 @@ mmap_handler(int fd, void *addr)
         spt_entry_free(&spte->hash_elem, NULL);  // Pass NULL as the second argument
       }
     }
+
+    lock_acquire(&filesys_lock);
+    file_close(reopened_file);
+    lock_release(&filesys_lock);
+    return -1;
   }
   
   return mapid;
@@ -901,6 +916,7 @@ munmap_handler(mapid_t mapping)
   // remove mapping
   mmap_remove(mapping);
 }
+#endif // VM
 
 static struct file *
 get_file(int fd)

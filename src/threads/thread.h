@@ -114,14 +114,15 @@ struct thread
 #ifdef VM
    struct hash spt;                   /* Supplemental page table. */
    void *esp;
+
+   /* Memory mapped files */
+   struct list mmap_list;        /* List of memory mapped files */
+   mapid_t next_mapid;           /* Next mapping ID to assign */
 #endif
 
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */
 
-    /* Memory mapped files */
-    struct list mmap_list;        /* List of memory mapped files */
-    mapid_t next_mapid;           /* Next mapping ID to assign */
   };
 
 /* If false (default), use round-robin scheduler.

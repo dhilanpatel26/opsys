@@ -263,10 +263,10 @@ process_exit (void)
 
 #ifdef VM
   frame_free_thread_frames(thread_current());
-#endif
-
+  
   /* Add before other cleanup */
   mmap_remove_all();
+#endif
 
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
@@ -796,7 +796,7 @@ setup_stack_args_helper (void **esp, const char *file_name)
 
   // Push fake return address
   *esp -= 4;
-  *(void**)*esp = (void*)0xffffffff;
+  *(void**)*esp = (void*)0;
 
   palloc_free_page(fn_copy);
 
