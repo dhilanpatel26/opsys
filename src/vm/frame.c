@@ -245,7 +245,12 @@ frame_evict(void)
       clock_ptr = list_next(clock_ptr);
       continue;
     }
-      
+    if (lock_held_by_current_thread(&f->spte->page_lock)) {
+    clock_ptr = list_next(clock_ptr);
+    iterations++;
+    continue;
+}
+
     /* Try to acquire the page lock for this frame's SPT entry */
     // Note: the page we are trying to acquire should not have a frame in the list
     if (!lock_try_acquire(&f->spte->page_lock)) {
