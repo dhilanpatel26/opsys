@@ -710,18 +710,23 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 static bool
 setup_stack_args_helper (void **esp, const char *file_name) 
 {
-  char *fn_copy = palloc_get_page(0);
-  if (fn_copy == NULL) {
-    return false;
-  }
+  // char *fn_copy = palloc_get_page(0);
+  // if (fn_copy == NULL) {
+  //   return false;
+  // }
 
-  strlcpy(fn_copy, file_name, PGSIZE);
+  // strlcpy(fn_copy, file_name, PGSIZE);
 
   char *token;
   char *save_ptr;
 
   int argc = 0;
   char *argv[32];
+  char *fn_copy = malloc(strlen(file_name) + 1);
+  if (fn_copy == NULL) {
+    return false;
+  }
+  strlcpy(fn_copy, file_name, strlen(file_name) + 1);
 
   for (token = strtok_r(fn_copy, " ", &save_ptr); token != NULL; 
   token = strtok_r(NULL, " ", &save_ptr)) {
@@ -769,7 +774,12 @@ setup_stack_args_helper (void **esp, const char *file_name)
   char *arg_addrs[argc];
   for (int i = argc - 1; i >= 0; i--) {
     size_t len = strlen(argv[i]) + 1;
+    if ((uint32_t)*esp - len < ((uint32_t)*esp & ~(PGSIZE - 1))) {
+      *esp = (void *)((uint32_t)(*esp) & ~(PGSIZE - 1));
+    }
+
     *esp -= len;
+    // printf("Copying argument %d: '%s' to stack at %p\n", i, argv[i], *esp);
     strlcpy(*esp, argv[i], len);
     arg_addrs[i] = *esp;
   }
@@ -798,7 +808,8 @@ setup_stack_args_helper (void **esp, const char *file_name)
   *esp -= 4;
   *(void**)*esp = (void*)0;
 
-  palloc_free_page(fn_copy);
+  // palloc_free_page(fn_copy);
+  free(fn_copy);
 
   // printf("Arguments setup complete. Stack contents:\n");
   // hex_dump((uintptr_t)*esp, *esp, PHYS_BASE - *esp, true);
@@ -815,7 +826,65 @@ setup_stack (void **esp, const char *file_name)
   bool success = false;
 
   kpage = palloc_get_page (PAL_USER | PAL_ZERO);
-  if (kpage != NULL) 
+  if (kpage == NULL) 
+    {
+      // printf("setup_stack: palloc_get_page failed\n");
+      #ifdef VM
+      char *fn_copy = malloc(strlen(file_name) + 1);
+      if (fn_copy == NULL) {
+        return false;
+      }
+      strlcpy(fn_copy, file_name, strlen(file_name) + 1);
+
+      struct sup_page_table_entry *spte = malloc(sizeof(struct sup_page_table_entry));
+      if (spte == NULL) {
+        free(fn_copy);
+        return false;
+      }
+
+      spte->vaddr = ((uint8_t *) PHYS_BASE) - PGSIZE;
+      spte->writable = true;
+      spte->status = IN_MEMORY;
+      spte->source = SOURCE_ZERO;
+      lock_init(&spte->page_lock);
+
+      // printf("File name: %s\n", fn_copy);
+
+      kpage = frame_allocate(PAL_USER | PAL_ZERO, spte); // implicitly registers
+      if (kpage == NULL) {
+        printf("Failed to allocate stack frame\n");
+        free(spte);
+        free(fn_copy);
+        return false;
+      }
+
+      // printf("File name after frame allocation: %s\n", fn_copy);
+
+      success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
+      if (!success) {
+        printf("Failed to install stack page\n");
+        free(spte);
+        palloc_free_page(kpage);
+        free(fn_copy);
+        return false;
+      }
+      
+      *esp = PHYS_BASE;
+
+      if (!sup_page_table_insert(&thread_current()->spt, spte)) {
+        printf("Failed to insert stack SPT entry\n");
+        free(spte);
+        palloc_free_page(kpage);
+        free(fn_copy);
+        return false;
+      }
+
+      success = setup_stack_args_helper(esp, fn_copy);
+      free(fn_copy);
+
+      #endif
+    }
+  else
     {
       success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
       if (success) {
@@ -864,6 +933,7 @@ setup_stack (void **esp, const char *file_name)
       else
         palloc_free_page (kpage);
     }
+  // printf("setup_stack: success = %d, esp = %p\n", success, *esp);
   return success;
 }
 

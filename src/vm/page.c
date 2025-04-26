@@ -70,7 +70,6 @@ load_page(struct sup_page_table_entry *spte)
   if (spte->status == IN_MEMORY) {
     /* Page was loaded by another thread, free our frame */
     frame_free(kpage);
-    lock_release(&spte->page_lock);
     return true;
   }
 

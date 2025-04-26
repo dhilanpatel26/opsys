@@ -248,7 +248,7 @@ frame_evict(void)
       
     /* Try to acquire the page lock for this frame's SPT entry */
     // Note: the page we are trying to acquire should not have a frame in the list
-    if (!lock_try_acquire(&f->spte->page_lock)) {
+    if (lock_held_by_current_thread(&f->spte->page_lock) || !lock_try_acquire(&f->spte->page_lock)) {
       /* Skip if we can't get the lock without blocking */
       // printf("DEBUG: Skipping frame %p - could not acquire lock\n", f->kpage);
       /* Don't count as an iteration? */
