@@ -111,8 +111,16 @@ mmap_remove(mapid_t mapid)
         
         // remove from supplemental page table
         if (spte != NULL) {
-        hash_delete(&t->spt, &spte->hash_elem);
-        spt_entry_free(&spte->hash_elem, NULL);
+          struct file *spte_file = spte->file;
+
+          hash_delete(&t->spt, &spte->hash_elem);
+          
+          if (spte_file != NULL) {
+            lock_acquire(&filesys_lock);
+            file_close(spte_file);
+            lock_release(&filesys_lock);
+          }
+          free(spte);
         }
     }
   }
