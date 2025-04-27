@@ -147,6 +147,8 @@ start_process (void *aux)
   struct intr_frame if_;
   bool success;
 
+  // printf("DEBUG: Starting process %s with tid %d\n", file_name, cur->tid);
+
   /* Initialize interrupt frame and load executable. */
   memset (&if_, 0, sizeof if_);
   if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
@@ -166,6 +168,7 @@ start_process (void *aux)
   /* If load failed, quit. */
   if (!success) {
     pd->exited = true;
+    // printf("DEBUG: Load failed for process with tid %d\n", cur->tid);
     thread_exit ();
   }
 
@@ -174,6 +177,8 @@ start_process (void *aux)
   // printf("DEBUG: f = %p\n", f);
   frame_unpin(f);
   #endif
+
+  // printf("DEBUG: Load successful for process with tid %d\n", cur->tid);
 
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in

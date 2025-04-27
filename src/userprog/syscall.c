@@ -71,6 +71,9 @@ syscall_handler (struct intr_frame *f)
     thread_current()->esp = f->esp;
   #endif
   int syscall_number = *(int*) translate_uvaddr(esp);
+
+  // printf("syscall: %d\n", syscall_number);
+
   translate_uvaddr((void*)((char*)esp + 3)); // ensure entire syscall number is valid
 
   switch (syscall_number) {
@@ -173,6 +176,7 @@ syscall_handler (struct intr_frame *f)
       translate_uvaddr((void*)((char*)esp + 15));
       int bytes_written = write_handler(fd, buffer, length);
       f->eax = bytes_written;
+      // printf("write_handler returned %d bytes\n", bytes_written);
       return;
     }
     case SYS_HALT: {
@@ -278,15 +282,24 @@ kernel_buffer_copy (const void *user_buffer, unsigned length) {
 
   // buffer is a user vaddr
   if (!validate_buffer(user_buffer, length)) {
+    // printf("kernel_buffer_copy: validate_buffer failed\n");
     return NULL;
   }
 
   // calculate how many pages we need based on whats in the buffer
   size_t page_count = (length + PGSIZE - 1) / PGSIZE;
 
-  void *kernel_buffer = palloc_get_multiple(0, page_count);
+  void *kernel_buffer = palloc_get_multiple(PAL_USER | PAL_ZERO, page_count);
   if (kernel_buffer == NULL) {
-    return NULL;
+    // printf("kernel_buffer_copy: palloc_get_multiple failed, page count: %zu\n", page_count);
+    
+    kernel_buffer = frame_palloc_get_multiple(PAL_USER | PAL_ZERO, page_count);
+    if (kernel_buffer == NULL) {
+      // printf("kernel_buffer_copy: frame_palloc_get_multiple failed\n");
+      return NULL;
+    }
+    // printf("re-try palloc succeeded, kernel_buffer: %p, page count: %zu\n", 
+    //        kernel_buffer, page_count);
   }
 
   const char *source = (char*) user_buffer;
@@ -314,10 +327,20 @@ write_handler (int fd, const void *user_buffer, unsigned length) {
     return 0;
   }
 
+  // int retries = 0;
+  // while (!validate_buffer(user_buffer, length) && retries < 3) {
+  //   // printf("Buffer validation failed, retrying (%d/3)\n", retries + 1);
+  //   retries++;
+  //   thread_yield();
+  // }
+
   if(!validate_buffer(user_buffer, length)){
+    // printf("write_handler: validate_buffer failed\n");
     exit_handler(-1);  // Terminate the process
     NOT_REACHED();
   }
+
+  // printf("Buffer validated, length: %u\n", length);
 
   if (fd <= 0 || fd >= FILE_TABLE_SIZE) {
     return -1;
@@ -339,6 +362,8 @@ write_handler (int fd, const void *user_buffer, unsigned length) {
   }
   #endif
 
+  // printf("User buffer pinned, page count: %zu\n", page_count);
+
   if (fd == 1) {
     void *kernel_buffer = kernel_buffer_copy(user_buffer, length);
     if (kernel_buffer == NULL) {
@@ -357,7 +382,7 @@ write_handler (int fd, const void *user_buffer, unsigned length) {
       #endif
       return -1;
     }
-
+    
     putbuf(kernel_buffer, length);
     palloc_free_multiple(kernel_buffer, page_count);
 
@@ -390,11 +415,18 @@ write_handler (int fd, const void *user_buffer, unsigned length) {
     return -1;
   }
 
+  // printf("DEBUG: Kernel buffer copied, length: %u\n", length);
+
   lock_acquire(&filesys_lock);
   int bytes_written = file_write(file, kernel_buffer, length);
   lock_release(&filesys_lock);
+
+  // printf("DEBUG: Bytes written: %d\n", bytes_written);
   
   palloc_free_multiple(kernel_buffer, page_count);
+
+  // printf("DEBUG: Kernel buffer freed\n");
+
   return (bytes_written >= 0) ? bytes_written : -1;
 }
 
@@ -605,10 +637,19 @@ read_handler(int fd, void *user_buffer, unsigned length) {
   struct thread *cur = thread_current();
   if (fd == 0) {
     // read from stdin
-    void *kernel_buffer = palloc_get_multiple(0, page_count);
+    void *kernel_buffer = palloc_get_multiple(PAL_USER | PAL_ZERO, page_count);
     if (kernel_buffer == NULL) {
-      return -1;
+      // printf("read_handler: palloc_get_multiple failed, page count: %zu\n", page_count);
+      
+      kernel_buffer = frame_palloc_get_multiple(PAL_USER | PAL_ZERO, page_count);
+      if (kernel_buffer == NULL) {
+        // printf("read_handler: frame_palloc_get_multiple failed\n");
+        return -1;
+      }
+      // printf("re-try palloc succeeded, kernel_buffer: %p, page count: %zu\n", 
+      //        kernel_buffer, page_count);
     }
+
     unsigned i;
     for (i = 0; i < length; i++) {
       ((uint8_t*) kernel_buffer)[i] = input_getc();
@@ -636,9 +677,17 @@ read_handler(int fd, void *user_buffer, unsigned length) {
   }
 
   
-  void *kernel_buffer = palloc_get_multiple(0, page_count);
+  void *kernel_buffer = palloc_get_multiple(PAL_USER | PAL_ZERO, page_count);
   if (kernel_buffer == NULL) {
-    return -1;
+    // printf("read_handler: palloc_get_multiple failed, page count: %zu\n", page_count);
+    
+    kernel_buffer = frame_palloc_get_multiple(PAL_USER | PAL_ZERO, page_count);
+    if (kernel_buffer == NULL) {
+      // printf("read_handler: frame_palloc_get_multiple failed\n");
+      return -1;
+    }
+    // printf("re-try palloc succeeded, kernel_buffer: %p, page count: %zu\n", 
+    //        kernel_buffer, page_count);
   }
 
   lock_acquire(&filesys_lock);  // Ensure thread safety

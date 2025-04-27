@@ -20,7 +20,7 @@ static int pinned_frames = 0;
 static struct list frame_list;       /* List of all frames */
 static struct lock frame_table_lock; /* Lock for frame table operations */
 
-static void *frame_evict(void);      /* Evict a frame using clock algorithm */
+static void *frame_evict(bool reuse);      /* Evict a frame using clock algorithm */
 
 /* Initializes the frame table */
 void
@@ -70,7 +70,7 @@ frame_allocate(enum palloc_flags flags, struct sup_page_table_entry *spte)
   /* If no free frame, evict one */
   if (kpage == NULL) {
 #ifdef USERPROG
-    kpage = frame_evict();
+    kpage = frame_evict(true);
     if (kpage == NULL) {
       lock_release(&frame_table_lock);
       return NULL;
@@ -196,7 +196,7 @@ frame_allocate(enum palloc_flags flags, struct sup_page_table_entry *spte)
 
 /* Called with frame_table_lock held. Do not release. */
 static void *
-frame_evict(void) 
+frame_evict(bool reuse) 
 {
   // enum intr_level old_level = intr_disable();
 #ifdef USERPROG
@@ -354,6 +354,11 @@ frame_evict(void)
       // intr_set_level(old_level);
       
       // printf("DEBUG: Successfully evicted frame %p\n", kpage);
+
+      if (!reuse) {
+        palloc_free_page(kpage);
+      }
+
       return kpage; /* Reusing physical address of frame (translated to kernel vaddr here) */
     }
     clock_ptr = list_next(clock_ptr);
@@ -511,3 +516,23 @@ void frame_free_thread_frames(struct thread *t) {
   lock_release(&frame_table_lock);
 }
 #endif
+
+void *
+frame_palloc_get_multiple(enum palloc_flags flags, size_t page_count) 
+{
+  lock_acquire(&frame_table_lock);
+  for (size_t i = 0; i < page_count * 2; i++) {
+    if (frame_evict(false) == NULL) {
+      // If we can't evict a frame, release the lock and return NULL
+      // printf("DEBUG: Frame eviction failed on iteration %zu\n", i);
+      lock_release(&frame_table_lock);
+      return NULL;
+    }
+  }
+
+  // retry allocation after eviction (hopefully not null)
+  void *buffer = palloc_get_multiple(flags, page_count);
+  // printf("DEBUG: buffer = %p, page_count = %zu\n", buffer, page_count);
+  lock_release(&frame_table_lock);
+  return buffer;
+}
