@@ -517,22 +517,56 @@ void frame_free_thread_frames(struct thread *t) {
 }
 #endif
 
-void *
-frame_palloc_get_multiple(enum palloc_flags flags, size_t page_count) 
-{
+// void *
+// frame_palloc_get_multiple(enum palloc_flags flags, size_t page_count) 
+// {
+//   lock_acquire(&frame_table_lock);
+//   for (size_t i = 0; i < page_count * 2; i++) {
+//     if (frame_evict(false) == NULL) {
+//       // If we can't evict a frame, release the lock and return NULL
+//       // printf("DEBUG: Frame eviction failed on iteration %zu\n", i);
+//       lock_release(&frame_table_lock);
+//       return NULL;
+//     }
+//   }
+
+//   // retry allocation after eviction (hopefully not null)
+//   void *buffer = palloc_get_multiple(flags, page_count);
+//   // printf("DEBUG: buffer = %p, page_count = %zu\n", buffer, page_count);
+//   lock_release(&frame_table_lock);
+//   return buffer;
+// }
+
+void *frame_palloc_get_multiple(enum palloc_flags flags, size_t page_count) {
   lock_acquire(&frame_table_lock);
-  for (size_t i = 0; i < page_count * 2; i++) {
-    if (frame_evict(false) == NULL) {
-      // If we can't evict a frame, release the lock and return NULL
-      // printf("DEBUG: Frame eviction failed on iteration %zu\n", i);
-      lock_release(&frame_table_lock);
-      return NULL;
+  
+  // Try eviction a few times with yields in between
+  for (int attempts = 0; attempts < 10; attempts++) {
+    // Try to evict enough frames
+    for (size_t i = 0; i < page_count * 2; i++) {
+      if (frame_evict(false) == NULL) {
+        // If we can't evict a frame this iteration
+        break;
+      }
     }
+    
+    // Try allocation after eviction
+    void *buffer = palloc_get_multiple(flags, page_count);
+    if (buffer != NULL) {
+      // Success!
+      lock_release(&frame_table_lock);
+      return buffer;
+    }
+    
+    // Release lock while we yield to avoid deadlock
+    lock_release(&frame_table_lock);
+    thread_yield();
+    lock_acquire(&frame_table_lock);
+    
+    // Print status after each attempt
+    printf("Retry %d: Eviction insufficient, yielding...\n", attempts + 1);
   }
 
-  // retry allocation after eviction (hopefully not null)
-  void *buffer = palloc_get_multiple(flags, page_count);
-  // printf("DEBUG: buffer = %p, page_count = %zu\n", buffer, page_count);
   lock_release(&frame_table_lock);
-  return buffer;
+  return NULL;  // All attempts failed
 }

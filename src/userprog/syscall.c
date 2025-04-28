@@ -251,7 +251,7 @@ validate_buffer (const void *buffer, unsigned length) {
 
   const uint8_t *buf = (const uint8_t *) buffer;
   if (get_user(buf) == -1) {
-    // printf("get_user failed\n");
+    printf("get_user failed, buf = %p\n", buf);
     return false;
   }
 
@@ -277,12 +277,13 @@ kernel_buffer_copy (const void *user_buffer, unsigned length) {
   // follows method of only accessing through user page table
 
   if (length == 0) {
+    printf("kernel_buffer_copy: length is 0\n");
     return NULL;
   }
 
   // buffer is a user vaddr
   if (!validate_buffer(user_buffer, length)) {
-    // printf("kernel_buffer_copy: validate_buffer failed\n");
+    printf("kernel_buffer_copy: validate_buffer failed\n");
     return NULL;
   }
 
@@ -291,15 +292,15 @@ kernel_buffer_copy (const void *user_buffer, unsigned length) {
 
   void *kernel_buffer = palloc_get_multiple(PAL_USER | PAL_ZERO, page_count);
   if (kernel_buffer == NULL) {
-    // printf("kernel_buffer_copy: palloc_get_multiple failed, page count: %zu\n", page_count);
+    printf("kernel_buffer_copy: palloc_get_multiple failed, page count: %zu\n", page_count);
     
     kernel_buffer = frame_palloc_get_multiple(PAL_USER | PAL_ZERO, page_count);
     if (kernel_buffer == NULL) {
-      // printf("kernel_buffer_copy: frame_palloc_get_multiple failed\n");
+      printf("kernel_buffer_copy: frame_palloc_get_multiple failed\n");
       return NULL;
     }
-    // printf("re-try palloc succeeded, kernel_buffer: %p, page count: %zu\n", 
-    //        kernel_buffer, page_count);
+    printf("re-try palloc succeeded, kernel_buffer: %p, page count: %zu\n", 
+           kernel_buffer, page_count);
   }
 
   const char *source = (char*) user_buffer;
@@ -310,9 +311,14 @@ kernel_buffer_copy (const void *user_buffer, unsigned length) {
     int byte = get_user((const uint8_t *)source + i);
     if (byte == -1) {
       palloc_free_multiple(kernel_buffer, page_count);
+      printf("kernel_buffer_copy: get_user failed at byte %u\n", i);
       return NULL;
     }
     dst[i] = (uint8_t)byte;
+  }
+
+  if (kernel_buffer == NULL) {
+    printf("kernel_buffer_copy: kernel_buffer is NULL after copy\n");
   }
 
   return kernel_buffer;
@@ -327,6 +333,28 @@ write_handler (int fd, const void *user_buffer, unsigned length) {
     return 0;
   }
 
+  #ifdef VM
+  // Pre-load all pages in the buffer range
+  void *start_addr = pg_round_down(user_buffer);
+  void *end_addr = pg_round_down((uint8_t*)user_buffer + length - 1);
+
+  for (void *page_addr = start_addr; page_addr <= end_addr; page_addr += PGSIZE) {
+    struct sup_page_table_entry *spte = 
+      sup_page_table_lookup(&thread_current()->spt, page_addr);
+    if (spte != NULL) {
+      lock_acquire(&spte->page_lock);
+      if (spte->status != IN_MEMORY) {
+        bool success = load_page(spte);
+        if (!success) {
+          lock_release(&spte->page_lock);
+          return -1;
+        }
+      }
+      lock_release(&spte->page_lock);
+    }
+  }
+  #endif
+
   // int retries = 0;
   // while (!validate_buffer(user_buffer, length) && retries < 3) {
   //   // printf("Buffer validation failed, retrying (%d/3)\n", retries + 1);
@@ -335,7 +363,7 @@ write_handler (int fd, const void *user_buffer, unsigned length) {
   // }
 
   if(!validate_buffer(user_buffer, length)){
-    // printf("write_handler: validate_buffer failed\n");
+    printf("write_handler: validate_buffer failed\n");
     exit_handler(-1);  // Terminate the process
     NOT_REACHED();
   }
@@ -412,6 +440,7 @@ write_handler (int fd, const void *user_buffer, unsigned length) {
 
   void *kernel_buffer = kernel_buffer_copy(user_buffer, length);
   if (kernel_buffer == NULL) {
+    printf("write_handler: kernel_buffer_copy failed\n");
     return -1;
   }
 
@@ -424,6 +453,20 @@ write_handler (int fd, const void *user_buffer, unsigned length) {
   // printf("DEBUG: Bytes written: %d\n", bytes_written);
   
   palloc_free_multiple(kernel_buffer, page_count);
+
+  #ifdef VM
+  // Unpin buffer pages
+  for (unsigned i = 0; i < length; i += PGSIZE) {
+    void *page_addr = pg_round_down((uint8_t*)user_buffer + i);
+    struct sup_page_table_entry *spte = 
+      sup_page_table_lookup(&thread_current()->spt, page_addr);
+    if (spte != NULL) {
+      void *kpage = pagedir_get_page(thread_current()->pagedir, page_addr);
+      if (kpage != NULL)
+        frame_unpin(kpage);
+    }
+  }
+  #endif
 
   // printf("DEBUG: Kernel buffer freed\n");
 
@@ -601,8 +644,8 @@ read_handler(int fd, void *user_buffer, unsigned length) {
     lock_acquire(&spte->page_lock);
     if (spte->status != IN_MEMORY) {
       bool success = load_page(spte);
+      lock_release(&spte->page_lock);
       if (!success) {
-        lock_release(&spte->page_lock);
         exit_handler(-1);
         NOT_REACHED();
       }
