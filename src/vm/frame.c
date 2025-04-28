@@ -492,6 +492,9 @@ frame_register(void *kpage, struct sup_page_table_entry *spte)
 #ifdef USERPROG
 void frame_free_thread_frames(struct thread *t) {
   lock_acquire(&frame_table_lock);
+
+  // printf("Thread id: %d exiting, initial frame stats: %d pinned, %d frames allocated, actual frame list size: %zu\n", t->tid, 
+  //   pinned_frames, total_frames, list_size(&frame_list));
   
   struct list_elem *e = list_begin(&frame_list);
   while (e != list_end(&frame_list)) {
@@ -513,6 +516,9 @@ void frame_free_thread_frames(struct thread *t) {
       e = next;
   }
   
+  // printf("Thread id: %d exited, final frame stats: %d pinned, %d frames allocated, actual frame list size: %zu\n", t->tid, 
+  //        pinned_frames, total_frames, list_size(&frame_list));
+
   lock_release(&frame_table_lock);
 }
 #endif
@@ -537,9 +543,39 @@ void frame_free_thread_frames(struct thread *t) {
 //   return buffer;
 // }
 
+// use for kernel-only frames (no spte) only, no page installation... ok?
 void *frame_palloc_get_multiple(enum palloc_flags flags, size_t page_count) {
   lock_acquire(&frame_table_lock);
+
+  void *kernel_buffer = palloc_get_multiple(PAL_USER | PAL_ZERO, page_count);
   
+  if (kernel_buffer != NULL) {
+    for (size_t i = 0; i < page_count; i++) {
+      void *kpage = (void*)((char*)kernel_buffer + i * PGSIZE);
+      
+      // essentially frame_register but without SPTE and atomic loop
+      struct frame_entry *f;        
+      /* Create frame entry */
+      f = malloc(sizeof(struct frame_entry));
+      // assuming malloc won't fail lol
+      
+      /* Set up frame entry */
+      f->kpage = kpage;
+      #ifdef USERPROG
+      f->owner = thread_current();
+      #endif
+      f->spte = NULL; // kernel-only frame, no SPTE
+
+      pinned_frames++;
+      f->pinned = true;  // Pinned by default during setup
+      
+      /* Add to frame table */
+      list_push_back(&frame_list, &f->elem);
+    }
+    lock_release(&frame_table_lock);
+    return kernel_buffer;  // Successfully allocated
+  }
+
   // Try eviction a few times with yields in between
   for (int attempts = 0; attempts < 10; attempts++) {
     // Try to evict enough frames
@@ -554,6 +590,30 @@ void *frame_palloc_get_multiple(enum palloc_flags flags, size_t page_count) {
     void *buffer = palloc_get_multiple(flags, page_count);
     if (buffer != NULL) {
       // Success!
+
+      for (size_t i = 0; i < page_count; i++) {
+        void *kpage = (void*)((char*)buffer + i * PGSIZE);
+        
+        // essentially frame_register but without SPTE and atomic loop
+        struct frame_entry *f;        
+        /* Create frame entry */
+        f = malloc(sizeof(struct frame_entry));
+        // assuming malloc won't fail lol
+        
+        /* Set up frame entry */
+        f->kpage = kpage;
+        #ifdef USERPROG
+        f->owner = thread_current();
+        #endif
+        f->spte = NULL; // kernel-only frame, no SPTE
+  
+        pinned_frames++;
+        f->pinned = true;  // Pinned by default during setup
+        
+        /* Add to frame table */
+        list_push_back(&frame_list, &f->elem);
+      }
+
       lock_release(&frame_table_lock);
       return buffer;
     }
@@ -564,7 +624,7 @@ void *frame_palloc_get_multiple(enum palloc_flags flags, size_t page_count) {
     lock_acquire(&frame_table_lock);
     
     // Print status after each attempt
-    printf("Retry %d: Eviction insufficient, yielding...\n", attempts + 1);
+    // printf("Retry %d: Eviction insufficient, yielding...\n", attempts + 1);
   }
 
   lock_release(&frame_table_lock);

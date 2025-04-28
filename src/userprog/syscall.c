@@ -290,17 +290,9 @@ kernel_buffer_copy (const void *user_buffer, unsigned length) {
   // calculate how many pages we need based on whats in the buffer
   size_t page_count = (length + PGSIZE - 1) / PGSIZE;
 
-  void *kernel_buffer = palloc_get_multiple(PAL_USER | PAL_ZERO, page_count);
+  void *kernel_buffer = frame_palloc_get_multiple(PAL_USER | PAL_ZERO, page_count);
   if (kernel_buffer == NULL) {
-    // printf("kernel_buffer_copy: palloc_get_multiple failed, page count: %zu\n", page_count);
-    
-    kernel_buffer = frame_palloc_get_multiple(PAL_USER | PAL_ZERO, page_count);
-    if (kernel_buffer == NULL) {
-      // printf("kernel_buffer_copy: frame_palloc_get_multiple failed\n");
-      return NULL;
-    }
-    // printf("re-try palloc succeeded, kernel_buffer: %p, page count: %zu\n", 
-    //        kernel_buffer, page_count);
+    return NULL;
   }
 
   const char *source = (char*) user_buffer;
@@ -310,7 +302,13 @@ kernel_buffer_copy (const void *user_buffer, unsigned length) {
   for (unsigned i = 0; i < length; i++) {
     int byte = get_user((const uint8_t *)source + i);
     if (byte == -1) {
-      palloc_free_multiple(kernel_buffer, page_count);
+
+      for (size_t i = 0; i < page_count; i++) {
+        void *kpage = (void*)((char*)kernel_buffer + i * PGSIZE);
+        frame_free(kpage); // also palloc_frees
+      }
+
+      // palloc_free_multiple(kernel_buffer, page_count);
       // printf("kernel_buffer_copy: get_user failed at byte %u\n", i);
       return NULL;
     }
@@ -412,7 +410,13 @@ write_handler (int fd, const void *user_buffer, unsigned length) {
     }
     
     putbuf(kernel_buffer, length);
-    palloc_free_multiple(kernel_buffer, page_count);
+
+    for (size_t i = 0; i < page_count; i++) {
+      void *kpage = (void*)((char*)kernel_buffer + i * PGSIZE);
+      frame_free(kpage);  // Remove from frame list before freeing
+    }
+
+    // palloc_free_multiple(kernel_buffer, page_count);
 
     #ifdef VM
     // Unpin after copy is complete
@@ -452,7 +456,12 @@ write_handler (int fd, const void *user_buffer, unsigned length) {
 
   // printf("DEBUG: Bytes written: %d\n", bytes_written);
   
-  palloc_free_multiple(kernel_buffer, page_count);
+  for (size_t i = 0; i < page_count; i++) {
+    void *kpage = (void*)((char*)kernel_buffer + i * PGSIZE);
+    frame_free(kpage);  // Remove from frame list before freeing
+  }
+
+  // palloc_free_multiple(kernel_buffer, page_count);
 
   #ifdef VM
   // Unpin buffer pages
@@ -680,17 +689,9 @@ read_handler(int fd, void *user_buffer, unsigned length) {
   struct thread *cur = thread_current();
   if (fd == 0) {
     // read from stdin
-    void *kernel_buffer = palloc_get_multiple(PAL_USER | PAL_ZERO, page_count);
+    void *kernel_buffer = frame_palloc_get_multiple(PAL_USER | PAL_ZERO, page_count);
     if (kernel_buffer == NULL) {
-      // printf("read_handler: palloc_get_multiple failed, page count: %zu\n", page_count);
-      
-      kernel_buffer = frame_palloc_get_multiple(PAL_USER | PAL_ZERO, page_count);
-      if (kernel_buffer == NULL) {
-        // printf("read_handler: frame_palloc_get_multiple failed\n");
-        return -1;
-      }
-      // printf("re-try palloc succeeded, kernel_buffer: %p, page count: %zu\n", 
-      //        kernel_buffer, page_count);
+      return -1;
     }
 
     unsigned i;
@@ -700,12 +701,23 @@ read_handler(int fd, void *user_buffer, unsigned length) {
 
     for (unsigned j = 0; j < i; j++) {
       if (!put_user((uint8_t*) user_buffer + j, ((uint8_t*) kernel_buffer)[j])) {
-        palloc_free_multiple(kernel_buffer, page_count);
+
+        for (size_t i = 0; i < page_count; i++) {
+          void *kpage = (void*)((char*)kernel_buffer + i * PGSIZE);
+          frame_free(kpage);  // Remove from frame list before freeing
+        }
+
+        // palloc_free_multiple(kernel_buffer, page_count);
         return -1;
       }
     }
 
-    palloc_free_multiple(kernel_buffer, page_count);
+    for (size_t i = 0; i < page_count; i++) {
+      void *kpage = (void*)((char*)kernel_buffer + i * PGSIZE);
+      frame_free(kpage);  // Remove from frame list before freeing
+    }
+
+    // palloc_free_multiple(kernel_buffer, page_count);
     return i;
   }
 
@@ -720,17 +732,9 @@ read_handler(int fd, void *user_buffer, unsigned length) {
   }
 
   
-  void *kernel_buffer = palloc_get_multiple(PAL_USER | PAL_ZERO, page_count);
+  void *kernel_buffer = frame_palloc_get_multiple(PAL_USER | PAL_ZERO, page_count);
   if (kernel_buffer == NULL) {
-    // printf("read_handler: palloc_get_multiple failed, page count: %zu\n", page_count);
-    
-    kernel_buffer = frame_palloc_get_multiple(PAL_USER | PAL_ZERO, page_count);
-    if (kernel_buffer == NULL) {
-      // printf("read_handler: frame_palloc_get_multiple failed\n");
-      return -1;
-    }
-    // printf("re-try palloc succeeded, kernel_buffer: %p, page count: %zu\n", 
-    //        kernel_buffer, page_count);
+    return -1;
   }
 
   lock_acquire(&filesys_lock);  // Ensure thread safety
@@ -740,13 +744,24 @@ read_handler(int fd, void *user_buffer, unsigned length) {
   if (bytes_read > 0) {
     for (int i = 0; i < bytes_read; i++) {
       if (!put_user((uint8_t*) user_buffer + i, ((uint8_t*) kernel_buffer)[i])) {
-        palloc_free_multiple(kernel_buffer, page_count);
+
+        for (size_t i = 0; i < page_count; i++) {
+          void *kpage = (void*)((char*)kernel_buffer + i * PGSIZE);
+          frame_free(kpage);  // Remove from frame list before freeing
+        }
+
+        // palloc_free_multiple(kernel_buffer, page_count);
         return -1;
       }
     }
   }
 
-  palloc_free_multiple(kernel_buffer, page_count);
+  for (size_t i = 0; i < page_count; i++) {
+    void *kpage = (void*)((char*)kernel_buffer + i * PGSIZE);
+    frame_free(kpage);  // Remove from frame list before freeing
+  }
+
+  // palloc_free_multiple(kernel_buffer, page_count);
 
   #ifdef VM
   // Unpin after copying is complete
