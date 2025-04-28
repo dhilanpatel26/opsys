@@ -251,7 +251,7 @@ validate_buffer (const void *buffer, unsigned length) {
 
   const uint8_t *buf = (const uint8_t *) buffer;
   if (get_user(buf) == -1) {
-    printf("get_user failed, buf = %p\n", buf);
+    // printf("get_user failed, buf = %p\n", buf);
     return false;
   }
 

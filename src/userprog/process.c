@@ -829,116 +829,72 @@ setup_stack (void **esp, const char *file_name)
 {
   uint8_t *kpage;
   bool success = false;
+  
+#ifdef VM
+  char *fn_copy = malloc(strlen(file_name) + 1);
+  if (fn_copy == NULL) {
+    return false;
+  }
+  strlcpy(fn_copy, file_name, strlen(file_name) + 1);
 
+  struct sup_page_table_entry *spte = malloc(sizeof(struct sup_page_table_entry));
+  if (spte == NULL) {
+    free(fn_copy);
+    return false;
+  }
+  spte->vaddr = ((uint8_t *) PHYS_BASE) - PGSIZE;
+  spte->writable = true;
+  spte->status = IN_MEMORY;
+  spte->source = SOURCE_ZERO;
+  lock_init(&spte->page_lock);
+
+  kpage = frame_allocate(PAL_USER | PAL_ZERO, spte); // implicitly registers
+  if (kpage == NULL) {
+    printf("Failed to allocate stack frame\n");
+    free(spte);
+    free(fn_copy);
+    return false;
+  }
+
+  // printf("File name after frame allocation: %s\n", fn_copy);
+
+  success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
+  if (!success) {
+    printf("Failed to install stack page\n");
+    free(spte);
+    frame_free(kpage);
+    free(fn_copy);
+    return false;
+  }
+  
+  *esp = PHYS_BASE;
+
+  if (!sup_page_table_insert(&thread_current()->spt, spte)) {
+    printf("Failed to insert stack SPT entry\n");
+    free(spte);
+    frame_free(kpage);
+    free(fn_copy);
+    return false;
+  }
+
+  success = setup_stack_args_helper(esp, fn_copy);
+  free(fn_copy);
+#else
   kpage = palloc_get_page (PAL_USER | PAL_ZERO);
   if (kpage == NULL) 
     {
-      // printf("setup_stack: palloc_get_page failed\n");
-      #ifdef VM
-      char *fn_copy = malloc(strlen(file_name) + 1);
-      if (fn_copy == NULL) {
-        return false;
-      }
-      strlcpy(fn_copy, file_name, strlen(file_name) + 1);
-
-      struct sup_page_table_entry *spte = malloc(sizeof(struct sup_page_table_entry));
-      if (spte == NULL) {
-        free(fn_copy);
-        return false;
-      }
-
-      spte->vaddr = ((uint8_t *) PHYS_BASE) - PGSIZE;
-      spte->writable = true;
-      spte->status = IN_MEMORY;
-      spte->source = SOURCE_ZERO;
-      lock_init(&spte->page_lock);
-
-      // printf("File name: %s\n", fn_copy);
-
-      kpage = frame_allocate(PAL_USER | PAL_ZERO, spte); // implicitly registers
-      if (kpage == NULL) {
-        printf("Failed to allocate stack frame\n");
-        free(spte);
-        free(fn_copy);
-        return false;
-      }
-
-      // printf("File name after frame allocation: %s\n", fn_copy);
-
-      success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
-      if (!success) {
-        printf("Failed to install stack page\n");
-        free(spte);
-        palloc_free_page(kpage);
-        free(fn_copy);
-        return false;
-      }
-      
-      *esp = PHYS_BASE;
-
-      if (!sup_page_table_insert(&thread_current()->spt, spte)) {
-        printf("Failed to insert stack SPT entry\n");
-        free(spte);
-        palloc_free_page(kpage);
-        free(fn_copy);
-        return false;
-      }
-
-      success = setup_stack_args_helper(esp, fn_copy);
-      free(fn_copy);
-
-      #endif
+      printf("Failed to allocate stack page\n");
+      return false;
     }
-  else
-    {
-      success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
-      if (success) {
-        *esp = PHYS_BASE;
-
-#ifdef VM
-        struct sup_page_table_entry *spte = malloc(sizeof(struct sup_page_table_entry));
-        if (spte == NULL) {
-          palloc_free_page(kpage);
-          return false;
-        }
-
-        // printf("Creating stack SPT entry at %p\n", ((uint8_t *) PHYS_BASE) - PGSIZE);
-
-        spte->vaddr = ((uint8_t *) PHYS_BASE) - PGSIZE;
-        spte->writable = true;
-        spte->status = IN_MEMORY;
-        spte->source = SOURCE_ZERO;
-        lock_init(&spte->page_lock);
-
-        // Register the kpage with the frame system
-        if (frame_register(kpage, spte) == NULL) {
-          printf("Failed to register stack frame\n");
-          free(spte);
-          palloc_free_page(kpage);
-          return false;
-        }
-
-        // Don't call frame_pin here - frame_register already sets pinned=true
-
-        if (!sup_page_table_insert(&thread_current()->spt, spte)) {
-          printf("Failed to insert stack SPT entry\n");
-          free(spte);
-          palloc_free_page(kpage);
-          return false;
-        }
-
-        success = setup_stack_args_helper(esp, file_name);
-
-        // unpinned right before process starts executing
-        // at the end of process_start
-#else
-        success = setup_stack_args_helper(esp, file_name);
+  success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
+  if (success) {
+    *esp = PHYS_BASE;
+    success = setup_stack_args_helper(esp, file_name);
+  } else {
+    printf("Failed to install stack page\n");
+    palloc_free_page (kpage);
+  }
 #endif
-      }
-      else
-        palloc_free_page (kpage);
-    }
-  // printf("setup_stack: success = %d, esp = %p\n", success, *esp);
   return success;
 }
 

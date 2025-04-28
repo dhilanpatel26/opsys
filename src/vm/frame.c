@@ -506,7 +506,7 @@ void frame_free_thread_frames(struct thread *t) {
           f->pinned = false;
           pinned_frames--;
         }
-          // don't free the virtual page, that gets handled in process_exit
+          palloc_free_page(f->kpage); // Free the physical page
           list_remove(&f->elem);
           free(f);
           total_frames--;
