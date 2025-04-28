@@ -277,13 +277,13 @@ kernel_buffer_copy (const void *user_buffer, unsigned length) {
   // follows method of only accessing through user page table
 
   if (length == 0) {
-    printf("kernel_buffer_copy: length is 0\n");
+    // printf("kernel_buffer_copy: length is 0\n");
     return NULL;
   }
 
   // buffer is a user vaddr
   if (!validate_buffer(user_buffer, length)) {
-    printf("kernel_buffer_copy: validate_buffer failed\n");
+    // printf("kernel_buffer_copy: validate_buffer failed\n");
     return NULL;
   }
 
@@ -292,15 +292,15 @@ kernel_buffer_copy (const void *user_buffer, unsigned length) {
 
   void *kernel_buffer = palloc_get_multiple(PAL_USER | PAL_ZERO, page_count);
   if (kernel_buffer == NULL) {
-    printf("kernel_buffer_copy: palloc_get_multiple failed, page count: %zu\n", page_count);
+    // printf("kernel_buffer_copy: palloc_get_multiple failed, page count: %zu\n", page_count);
     
     kernel_buffer = frame_palloc_get_multiple(PAL_USER | PAL_ZERO, page_count);
     if (kernel_buffer == NULL) {
-      printf("kernel_buffer_copy: frame_palloc_get_multiple failed\n");
+      // printf("kernel_buffer_copy: frame_palloc_get_multiple failed\n");
       return NULL;
     }
-    printf("re-try palloc succeeded, kernel_buffer: %p, page count: %zu\n", 
-           kernel_buffer, page_count);
+    // printf("re-try palloc succeeded, kernel_buffer: %p, page count: %zu\n", 
+    //        kernel_buffer, page_count);
   }
 
   const char *source = (char*) user_buffer;
@@ -311,14 +311,14 @@ kernel_buffer_copy (const void *user_buffer, unsigned length) {
     int byte = get_user((const uint8_t *)source + i);
     if (byte == -1) {
       palloc_free_multiple(kernel_buffer, page_count);
-      printf("kernel_buffer_copy: get_user failed at byte %u\n", i);
+      // printf("kernel_buffer_copy: get_user failed at byte %u\n", i);
       return NULL;
     }
     dst[i] = (uint8_t)byte;
   }
 
   if (kernel_buffer == NULL) {
-    printf("kernel_buffer_copy: kernel_buffer is NULL after copy\n");
+    // printf("kernel_buffer_copy: kernel_buffer is NULL after copy\n");
   }
 
   return kernel_buffer;
@@ -363,7 +363,7 @@ write_handler (int fd, const void *user_buffer, unsigned length) {
   // }
 
   if(!validate_buffer(user_buffer, length)){
-    printf("write_handler: validate_buffer failed\n");
+    // printf("write_handler: validate_buffer failed\n");
     exit_handler(-1);  // Terminate the process
     NOT_REACHED();
   }
@@ -440,7 +440,7 @@ write_handler (int fd, const void *user_buffer, unsigned length) {
 
   void *kernel_buffer = kernel_buffer_copy(user_buffer, length);
   if (kernel_buffer == NULL) {
-    printf("write_handler: kernel_buffer_copy failed\n");
+    // printf("write_handler: kernel_buffer_copy failed\n");
     return -1;
   }
 
