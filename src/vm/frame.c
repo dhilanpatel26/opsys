@@ -5,6 +5,7 @@
 #include <list.h>
 #include <stdio.h>
 #include "threads/interrupt.h"
+#include <string.h>
 
 #ifdef USERPROG
 #include "userprog/pagedir.h"
@@ -335,7 +336,6 @@ frame_evict(bool reuse)
       /* Remove mapping from page table for the evicted frame */
       pagedir_clear_page(f->owner->pagedir, f->spte->vaddr);
       
-      lock_release(&f->spte->page_lock);
       
       /* Remove evicted from frame table */
       list_remove(&f->elem);
@@ -347,6 +347,8 @@ frame_evict(bool reuse)
       
       /* Update accounting */
       total_frames--;
+
+      lock_release(&f->spte->page_lock);
       
       /* Free the frame entry but not the physical page, will reuse! */
       free(f);
@@ -355,8 +357,14 @@ frame_evict(bool reuse)
       
       // printf("DEBUG: Successfully evicted frame %p\n", kpage);
 
-      if (!reuse) {
-        palloc_free_page(kpage);
+      palloc_free_page(kpage);
+
+      if (reuse) {
+        kpage = palloc_get_page(PAL_USER | PAL_ZERO); /* Reallocate a new page */
+        if (kpage == NULL) {
+          printf("DEBUG: Failed to reallocate frame after eviction\n");
+          return NULL; /* Could not get a new page */
+        }
       }
 
       return kpage; /* Reusing physical address of frame (translated to kernel vaddr here) */
