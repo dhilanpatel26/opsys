@@ -30,11 +30,13 @@ Katherine Forbes <kforbes6@jhu.edu>
 >> `struct' member, global or static variable, `typedef', or
 >> enumeration.  Identify the purpose of each in 25 words or less.
 
-void *esp; (in thread.h)
-Purpose: Saves user stack pointer during syscall entry to support stack growth on kernel-mode 
+Added to struct thread in thread.h:
+- void *esp;
+  - Purpose: Saves user stack pointer during syscall entry to support stack growth on kernel-mode.
 
-#define MAX_STACK_SIZE (8 * 1024 * 1024)
-Purpose: Defines an 8 MB upper limit on user stack size to prevent unbounded growth and kernel memory exhaustion.
+Added to syscall.h:
+- #define MAX_STACK_SIZE (8 * 1024 * 1024)
+  - Purpose: Defines an 8 MB upper limit on user stack size to prevent unbounded growth and kernel memory exhaustion.
 
 ---- ALGORITHMS ----
 
@@ -42,7 +44,11 @@ Purpose: Defines an 8 MB upper limit on user stack size to prevent unbounded gro
 >> invalid virtual address should cause the stack to be extended into
 >> the page that faulted.
 
-We define a heuristic valid_stack_access. There, it checks 1) fault address is in the user address space, 2) the fault is close enough to the current stack pointer (32 bytes at most) because a legitimate access like PUSH/PUSHA can access at most that much, and 3) make sure at most 8mb stack from physical base (allocation within stack limit).
+We define a heuristic valid_stack_access. There, it checks 
+1) Fault address is in the user address space
+2) The fault is close enough to the current stack pointer (32 bytes at most) because a legitimate access 
+   like PUSH/PUSHA can access at most that much
+3) The attempt is at most 8MB stack from physical base (a valid allocation within stack limit).
 
           MEMORY MAPPED FILES
           ===================
@@ -52,6 +58,32 @@ We define a heuristic valid_stack_access. There, it checks 1) fault address is i
 >> B1: Copy here the declaration of each new or changed `struct' or
 >> `struct' member, global or static variable, `typedef', or
 >> enumeration.  Identify the purpose of each in 25 words or less.
+
+- struct list mmap_list;
+  - Purpose: Linked list of memory-mapped files, updated on mmap/munmap system calls. Traversed during 
+    process exit to clean up all currently mapped files.
+
+- mapid_t next_mapid;
+  - Purpose: Incrementing index to uniquely identify an mmap entry. Used for mmap entry lookup in 
+    various functions.
+
+Added to mmap.h:
+- typedef int mapid_t;
+  - Purpose: Define a datatype for tracking unique indexes of mmap entries in a thread's mmap list.
+
+- struct mmap_entry {
+    mapid_t mapid;                // Mapping ID
+    struct file *file;            // File being mapped
+    void *addr;                   // Starting virtual address
+    size_t page_count;            // Number of pages in mapping
+    struct list_elem elem;        // List element for thread's mmap_list
+  };
+  - Purpose: Stores metadata about an mmap list entry that is necessary for mapping initialization, lookup, 
+    write-back, and teardown. Contains a list element to be a valid entry in the linked list data structure.
+
+Added to mmap.c:
+- extern struct lock filesys_lock;
+  - Purpose: Accessing global variable filesys_lock to atomically perform file system operations.
 
 ---- ALGORITHMS ----
 

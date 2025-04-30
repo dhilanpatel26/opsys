@@ -10,7 +10,6 @@
 #include <stdio.h>
 
 #ifdef VM
-/* Add this line */
 extern struct lock filesys_lock;
 
 // initialize mmap list for a thread
