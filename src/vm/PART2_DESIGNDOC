@@ -91,8 +91,12 @@ Added to mmap.c:
 >> memory subsystem.  Explain how the page fault and eviction
 >> processes differ between swap pages and other pages.
 
+We use the same frame table and page table structure as before. When a page fault happens for a mmap'd file, the page is loaded from the file into a frame and the frame gets mapped into the process's address space. Then, the page gets marked as a file-backed page with the flag SOURCE_MMAP. In eviction, dirty mmap'd pages get written back to their source file. For swap pages, dirty pages get written back to the swap space. For non-dirty pages, they are discarded.
+
 >> B3: Explain how you determine whether a new file mapping overlaps
 >> any existing segment.
+
+We check the new mapping's virtual address range to see if it overlaps other mmap'd files or other segments existing in the process's address space. We also use our SPT to track the mapped regions. This makes sure that our new mapping doesn't overwrite valid pages.
 
 ---- RATIONALE ----
 
@@ -102,6 +106,8 @@ Added to mmap.c:
 >> that much of their implementation can be shared.  Explain why your
 >> implementation either does or does not share much of the code for
 >> the two situations.
+
+We share code between mmap and executable pages. We use the same frame allocation and eviction policies as well as the same page table and frame table set-up. The main difference is the way that changes are written back. We write back mmap pages to the source files, and executable pages to swap space. There is a lot of shared code between these two situations. We handle mmap'd file write back in frame_evict() in frame.c and the difference is handled by checking the page's source. 
 
           SURVEY QUESTIONS
           ================
