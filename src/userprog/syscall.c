@@ -22,7 +22,6 @@
 
 #ifdef VM
 #include "vm/mmap.h"
-#define MAX_STACK_SIZE (8 * 1024 * 1024)  /* 8 MB stack */
 #endif
 
 static void syscall_handler (struct intr_frame *);
