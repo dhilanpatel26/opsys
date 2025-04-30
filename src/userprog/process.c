@@ -267,10 +267,8 @@ process_exit (void)
   }
 
 #ifdef VM
-  frame_free_thread_frames(thread_current());
-  
-  /* Add before other cleanup */
   mmap_remove_all();
+  frame_free_thread_frames(thread_current());
 #endif
 
   /* Destroy the current process's page directory and switch back
