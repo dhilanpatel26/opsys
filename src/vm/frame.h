@@ -31,4 +31,6 @@ void *frame_register(void *kpage, struct sup_page_table_entry *spte);
 void frame_free_thread_frames(struct thread *t);
 #endif
 
+void *frame_palloc_get_multiple(enum palloc_flags flags, size_t page_count);
+
 #endif

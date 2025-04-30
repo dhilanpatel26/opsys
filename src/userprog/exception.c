@@ -15,7 +15,6 @@
 #ifdef VM
 #include "vm/page.h"
 #endif
-#define MAX_STACK_SIZE (8 * 1024 * 1024)
 
 /* Number of page faults processed. */
 static long long page_fault_cnt;
@@ -274,7 +273,16 @@ page_fault (struct intr_frame *f)
 
 bool
 valid_stack_access(void *fault_addr, void *esp) {
+   size_t stack_extension = 0;
+#ifdef VM
+   stack_extension = (size_t) MAX_STACK_SIZE;
+#endif
+   uintptr_t f = (uintptr_t) fault_addr;
+   uintptr_t s = (uintptr_t) esp;
+   uintptr_t limit = (uintptr_t) (PHYS_BASE - stack_extension);
+
     return is_user_vaddr(fault_addr) &&
-           fault_addr >= esp - 32 &&
-           fault_addr >= PHYS_BASE - MAX_STACK_SIZE;
+           f >= s - 32 &&
+           f >= limit && 
+           f < (uintptr_t) PHYS_BASE;
 }

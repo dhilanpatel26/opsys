@@ -70,7 +70,6 @@ load_page(struct sup_page_table_entry *spte)
   if (spte->status == IN_MEMORY) {
     /* Page was loaded by another thread, free our frame */
     frame_free(kpage);
-    lock_release(&spte->page_lock);
     return true;
   }
 
@@ -95,7 +94,8 @@ load_page(struct sup_page_table_entry *spte)
       } else {
         /* Some to read, potentially some to zero */
 
-        frame_pin(kpage);  /* Prevent eviction during I/O */
+        // already pinned
+        // frame_pin(kpage);  /* Prevent eviction during I/O */
 
         /* File I/O doesn't need frame table lock */
         lock_acquire(&filesys_lock);
@@ -134,6 +134,7 @@ load_page(struct sup_page_table_entry *spte)
   }
   
   /* If we get here, loading failed */
+  frame_unpin(kpage);
   frame_free(kpage);
 #endif
   return false;

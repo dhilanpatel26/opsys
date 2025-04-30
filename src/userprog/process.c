@@ -147,6 +147,8 @@ start_process (void *aux)
   struct intr_frame if_;
   bool success;
 
+  // printf("DEBUG: Starting process %s with tid %d\n", file_name, cur->tid);
+
   /* Initialize interrupt frame and load executable. */
   memset (&if_, 0, sizeof if_);
   if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
@@ -166,6 +168,7 @@ start_process (void *aux)
   /* If load failed, quit. */
   if (!success) {
     pd->exited = true;
+    // printf("DEBUG: Load failed for process with tid %d\n", cur->tid);
     thread_exit ();
   }
 
@@ -174,6 +177,8 @@ start_process (void *aux)
   // printf("DEBUG: f = %p\n", f);
   frame_unpin(f);
   #endif
+
+  // printf("DEBUG: Load successful for process with tid %d\n", cur->tid);
 
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
@@ -262,10 +267,8 @@ process_exit (void)
   }
 
 #ifdef VM
-  frame_free_thread_frames(thread_current());
-  
-  /* Add before other cleanup */
   mmap_remove_all();
+  frame_free_thread_frames(thread_current());
 #endif
 
   /* Destroy the current process's page directory and switch back
@@ -710,18 +713,23 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 static bool
 setup_stack_args_helper (void **esp, const char *file_name) 
 {
-  char *fn_copy = palloc_get_page(0);
-  if (fn_copy == NULL) {
-    return false;
-  }
+  // char *fn_copy = palloc_get_page(0);
+  // if (fn_copy == NULL) {
+  //   return false;
+  // }
 
-  strlcpy(fn_copy, file_name, PGSIZE);
+  // strlcpy(fn_copy, file_name, PGSIZE);
 
   char *token;
   char *save_ptr;
 
   int argc = 0;
   char *argv[32];
+  char *fn_copy = malloc(strlen(file_name) + 1);
+  if (fn_copy == NULL) {
+    return false;
+  }
+  strlcpy(fn_copy, file_name, strlen(file_name) + 1);
 
   for (token = strtok_r(fn_copy, " ", &save_ptr); token != NULL; 
   token = strtok_r(NULL, " ", &save_ptr)) {
@@ -769,7 +777,12 @@ setup_stack_args_helper (void **esp, const char *file_name)
   char *arg_addrs[argc];
   for (int i = argc - 1; i >= 0; i--) {
     size_t len = strlen(argv[i]) + 1;
+    if ((uint32_t)*esp - len < ((uint32_t)*esp & ~(PGSIZE - 1))) {
+      *esp = (void *)((uint32_t)(*esp) & ~(PGSIZE - 1));
+    }
+
     *esp -= len;
+    // printf("Copying argument %d: '%s' to stack at %p\n", i, argv[i], *esp);
     strlcpy(*esp, argv[i], len);
     arg_addrs[i] = *esp;
   }
@@ -798,7 +811,8 @@ setup_stack_args_helper (void **esp, const char *file_name)
   *esp -= 4;
   *(void**)*esp = (void*)0;
 
-  palloc_free_page(fn_copy);
+  // palloc_free_page(fn_copy);
+  free(fn_copy);
 
   // printf("Arguments setup complete. Stack contents:\n");
   // hex_dump((uintptr_t)*esp, *esp, PHYS_BASE - *esp, true);
@@ -813,57 +827,72 @@ setup_stack (void **esp, const char *file_name)
 {
   uint8_t *kpage;
   bool success = false;
-
-  kpage = palloc_get_page (PAL_USER | PAL_ZERO);
-  if (kpage != NULL) 
-    {
-      success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
-      if (success) {
-        *esp = PHYS_BASE;
-
+  
 #ifdef VM
-        struct sup_page_table_entry *spte = malloc(sizeof(struct sup_page_table_entry));
-        if (spte == NULL) {
-          palloc_free_page(kpage);
-          return false;
-        }
+  char *fn_copy = malloc(strlen(file_name) + 1);
+  if (fn_copy == NULL) {
+    return false;
+  }
+  strlcpy(fn_copy, file_name, strlen(file_name) + 1);
 
-        // printf("Creating stack SPT entry at %p\n", ((uint8_t *) PHYS_BASE) - PGSIZE);
+  struct sup_page_table_entry *spte = malloc(sizeof(struct sup_page_table_entry));
+  if (spte == NULL) {
+    free(fn_copy);
+    return false;
+  }
+  spte->vaddr = ((uint8_t *) PHYS_BASE) - PGSIZE;
+  spte->writable = true;
+  spte->status = IN_MEMORY;
+  spte->source = SOURCE_ZERO;
+  lock_init(&spte->page_lock);
 
-        spte->vaddr = ((uint8_t *) PHYS_BASE) - PGSIZE;
-        spte->writable = true;
-        spte->status = IN_MEMORY;
-        spte->source = SOURCE_ZERO;
-        lock_init(&spte->page_lock);
+  kpage = frame_allocate(PAL_USER | PAL_ZERO, spte); // implicitly registers
+  if (kpage == NULL) {
+    printf("Failed to allocate stack frame\n");
+    free(spte);
+    free(fn_copy);
+    return false;
+  }
 
-        // Register the kpage with the frame system
-        if (frame_register(kpage, spte) == NULL) {
-          printf("Failed to register stack frame\n");
-          free(spte);
-          palloc_free_page(kpage);
-          return false;
-        }
+  // printf("File name after frame allocation: %s\n", fn_copy);
 
-        // Don't call frame_pin here - frame_register already sets pinned=true
+  success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
+  if (!success) {
+    printf("Failed to install stack page\n");
+    free(spte);
+    frame_free(kpage);
+    free(fn_copy);
+    return false;
+  }
+  
+  *esp = PHYS_BASE;
 
-        if (!sup_page_table_insert(&thread_current()->spt, spte)) {
-          printf("Failed to insert stack SPT entry\n");
-          free(spte);
-          palloc_free_page(kpage);
-          return false;
-        }
+  if (!sup_page_table_insert(&thread_current()->spt, spte)) {
+    printf("Failed to insert stack SPT entry\n");
+    free(spte);
+    frame_free(kpage);
+    free(fn_copy);
+    return false;
+  }
 
-        success = setup_stack_args_helper(esp, file_name);
-
-        // unpinned right before process starts executing
-        // at the end of process_start
+  success = setup_stack_args_helper(esp, fn_copy);
+  free(fn_copy);
 #else
-        success = setup_stack_args_helper(esp, file_name);
-#endif
-      }
-      else
-        palloc_free_page (kpage);
+  kpage = palloc_get_page (PAL_USER | PAL_ZERO);
+  if (kpage == NULL) 
+    {
+      printf("Failed to allocate stack page\n");
+      return false;
     }
+  success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
+  if (success) {
+    *esp = PHYS_BASE;
+    success = setup_stack_args_helper(esp, file_name);
+  } else {
+    printf("Failed to install stack page\n");
+    palloc_free_page (kpage);
+  }
+#endif
   return success;
 }
 

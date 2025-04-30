@@ -22,7 +22,7 @@
 
 #ifdef VM
 #include "vm/mmap.h"
-#define MAX_STACK_SIZE (8 * 1024 * 1024)  /* 8 MB stack */
+#include "vm/page.h"
 #endif
 
 static void syscall_handler (struct intr_frame *);
@@ -71,6 +71,9 @@ syscall_handler (struct intr_frame *f)
     thread_current()->esp = f->esp;
   #endif
   int syscall_number = *(int*) translate_uvaddr(esp);
+
+  // printf("syscall: %d\n", syscall_number);
+
   translate_uvaddr((void*)((char*)esp + 3)); // ensure entire syscall number is valid
 
   switch (syscall_number) {
@@ -173,6 +176,7 @@ syscall_handler (struct intr_frame *f)
       translate_uvaddr((void*)((char*)esp + 15));
       int bytes_written = write_handler(fd, buffer, length);
       f->eax = bytes_written;
+      // printf("write_handler returned %d bytes\n", bytes_written);
       return;
     }
     case SYS_HALT: {
@@ -247,7 +251,7 @@ validate_buffer (const void *buffer, unsigned length) {
 
   const uint8_t *buf = (const uint8_t *) buffer;
   if (get_user(buf) == -1) {
-    // printf("get_user failed\n");
+    // printf("get_user failed, buf = %p\n", buf);
     return false;
   }
 
@@ -273,18 +277,20 @@ kernel_buffer_copy (const void *user_buffer, unsigned length) {
   // follows method of only accessing through user page table
 
   if (length == 0) {
+    // printf("kernel_buffer_copy: length is 0\n");
     return NULL;
   }
 
   // buffer is a user vaddr
   if (!validate_buffer(user_buffer, length)) {
+    // printf("kernel_buffer_copy: validate_buffer failed\n");
     return NULL;
   }
 
   // calculate how many pages we need based on whats in the buffer
   size_t page_count = (length + PGSIZE - 1) / PGSIZE;
 
-  void *kernel_buffer = palloc_get_multiple(0, page_count);
+  void *kernel_buffer = frame_palloc_get_multiple(PAL_USER | PAL_ZERO, page_count);
   if (kernel_buffer == NULL) {
     return NULL;
   }
@@ -296,10 +302,21 @@ kernel_buffer_copy (const void *user_buffer, unsigned length) {
   for (unsigned i = 0; i < length; i++) {
     int byte = get_user((const uint8_t *)source + i);
     if (byte == -1) {
-      palloc_free_multiple(kernel_buffer, page_count);
+
+      for (size_t i = 0; i < page_count; i++) {
+        void *kpage = (void*)((char*)kernel_buffer + i * PGSIZE);
+        frame_free(kpage); // also palloc_frees
+      }
+
+      // palloc_free_multiple(kernel_buffer, page_count);
+      // printf("kernel_buffer_copy: get_user failed at byte %u\n", i);
       return NULL;
     }
     dst[i] = (uint8_t)byte;
+  }
+
+  if (kernel_buffer == NULL) {
+    // printf("kernel_buffer_copy: kernel_buffer is NULL after copy\n");
   }
 
   return kernel_buffer;
@@ -314,10 +331,42 @@ write_handler (int fd, const void *user_buffer, unsigned length) {
     return 0;
   }
 
+  #ifdef VM
+  // Pre-load all pages in the buffer range
+  void *start_addr = pg_round_down(user_buffer);
+  void *end_addr = pg_round_down((uint8_t*)user_buffer + length - 1);
+
+  for (void *page_addr = start_addr; page_addr <= end_addr; page_addr += PGSIZE) {
+    struct sup_page_table_entry *spte = 
+      sup_page_table_lookup(&thread_current()->spt, page_addr);
+    if (spte != NULL) {
+      lock_acquire(&spte->page_lock);
+      if (spte->status != IN_MEMORY) {
+        bool success = load_page(spte);
+        if (!success) {
+          lock_release(&spte->page_lock);
+          return -1;
+        }
+      }
+      lock_release(&spte->page_lock);
+    }
+  }
+  #endif
+
+  // int retries = 0;
+  // while (!validate_buffer(user_buffer, length) && retries < 3) {
+  //   // printf("Buffer validation failed, retrying (%d/3)\n", retries + 1);
+  //   retries++;
+  //   thread_yield();
+  // }
+
   if(!validate_buffer(user_buffer, length)){
+    // printf("write_handler: validate_buffer failed\n");
     exit_handler(-1);  // Terminate the process
     NOT_REACHED();
   }
+
+  // printf("Buffer validated, length: %u\n", length);
 
   if (fd <= 0 || fd >= FILE_TABLE_SIZE) {
     return -1;
@@ -339,6 +388,8 @@ write_handler (int fd, const void *user_buffer, unsigned length) {
   }
   #endif
 
+  // printf("User buffer pinned, page count: %zu\n", page_count);
+
   if (fd == 1) {
     void *kernel_buffer = kernel_buffer_copy(user_buffer, length);
     if (kernel_buffer == NULL) {
@@ -357,9 +408,15 @@ write_handler (int fd, const void *user_buffer, unsigned length) {
       #endif
       return -1;
     }
-
+    
     putbuf(kernel_buffer, length);
-    palloc_free_multiple(kernel_buffer, page_count);
+
+    for (size_t i = 0; i < page_count; i++) {
+      void *kpage = (void*)((char*)kernel_buffer + i * PGSIZE);
+      frame_free(kpage);  // Remove from frame list before freeing
+    }
+
+    // palloc_free_multiple(kernel_buffer, page_count);
 
     #ifdef VM
     // Unpin after copy is complete
@@ -387,14 +444,41 @@ write_handler (int fd, const void *user_buffer, unsigned length) {
 
   void *kernel_buffer = kernel_buffer_copy(user_buffer, length);
   if (kernel_buffer == NULL) {
+    // printf("write_handler: kernel_buffer_copy failed\n");
     return -1;
   }
+
+  // printf("DEBUG: Kernel buffer copied, length: %u\n", length);
 
   lock_acquire(&filesys_lock);
   int bytes_written = file_write(file, kernel_buffer, length);
   lock_release(&filesys_lock);
+
+  // printf("DEBUG: Bytes written: %d\n", bytes_written);
   
-  palloc_free_multiple(kernel_buffer, page_count);
+  for (size_t i = 0; i < page_count; i++) {
+    void *kpage = (void*)((char*)kernel_buffer + i * PGSIZE);
+    frame_free(kpage);  // Remove from frame list before freeing
+  }
+
+  // palloc_free_multiple(kernel_buffer, page_count);
+
+  #ifdef VM
+  // Unpin buffer pages
+  for (unsigned i = 0; i < length; i += PGSIZE) {
+    void *page_addr = pg_round_down((uint8_t*)user_buffer + i);
+    struct sup_page_table_entry *spte = 
+      sup_page_table_lookup(&thread_current()->spt, page_addr);
+    if (spte != NULL) {
+      void *kpage = pagedir_get_page(thread_current()->pagedir, page_addr);
+      if (kpage != NULL)
+        frame_unpin(kpage);
+    }
+  }
+  #endif
+
+  // printf("DEBUG: Kernel buffer freed\n");
+
   return (bytes_written >= 0) ? bytes_written : -1;
 }
 
@@ -569,8 +653,8 @@ read_handler(int fd, void *user_buffer, unsigned length) {
     lock_acquire(&spte->page_lock);
     if (spte->status != IN_MEMORY) {
       bool success = load_page(spte);
+      lock_release(&spte->page_lock);
       if (!success) {
-        lock_release(&spte->page_lock);
         exit_handler(-1);
         NOT_REACHED();
       }
@@ -605,10 +689,11 @@ read_handler(int fd, void *user_buffer, unsigned length) {
   struct thread *cur = thread_current();
   if (fd == 0) {
     // read from stdin
-    void *kernel_buffer = palloc_get_multiple(0, page_count);
+    void *kernel_buffer = frame_palloc_get_multiple(PAL_USER | PAL_ZERO, page_count);
     if (kernel_buffer == NULL) {
       return -1;
     }
+
     unsigned i;
     for (i = 0; i < length; i++) {
       ((uint8_t*) kernel_buffer)[i] = input_getc();
@@ -616,12 +701,23 @@ read_handler(int fd, void *user_buffer, unsigned length) {
 
     for (unsigned j = 0; j < i; j++) {
       if (!put_user((uint8_t*) user_buffer + j, ((uint8_t*) kernel_buffer)[j])) {
-        palloc_free_multiple(kernel_buffer, page_count);
+
+        for (size_t i = 0; i < page_count; i++) {
+          void *kpage = (void*)((char*)kernel_buffer + i * PGSIZE);
+          frame_free(kpage);  // Remove from frame list before freeing
+        }
+
+        // palloc_free_multiple(kernel_buffer, page_count);
         return -1;
       }
     }
 
-    palloc_free_multiple(kernel_buffer, page_count);
+    for (size_t i = 0; i < page_count; i++) {
+      void *kpage = (void*)((char*)kernel_buffer + i * PGSIZE);
+      frame_free(kpage);  // Remove from frame list before freeing
+    }
+
+    // palloc_free_multiple(kernel_buffer, page_count);
     return i;
   }
 
@@ -636,7 +732,7 @@ read_handler(int fd, void *user_buffer, unsigned length) {
   }
 
   
-  void *kernel_buffer = palloc_get_multiple(0, page_count);
+  void *kernel_buffer = frame_palloc_get_multiple(PAL_USER | PAL_ZERO, page_count);
   if (kernel_buffer == NULL) {
     return -1;
   }
@@ -648,13 +744,24 @@ read_handler(int fd, void *user_buffer, unsigned length) {
   if (bytes_read > 0) {
     for (int i = 0; i < bytes_read; i++) {
       if (!put_user((uint8_t*) user_buffer + i, ((uint8_t*) kernel_buffer)[i])) {
-        palloc_free_multiple(kernel_buffer, page_count);
+
+        for (size_t i = 0; i < page_count; i++) {
+          void *kpage = (void*)((char*)kernel_buffer + i * PGSIZE);
+          frame_free(kpage);  // Remove from frame list before freeing
+        }
+
+        // palloc_free_multiple(kernel_buffer, page_count);
         return -1;
       }
     }
   }
 
-  palloc_free_multiple(kernel_buffer, page_count);
+  for (size_t i = 0; i < page_count; i++) {
+    void *kpage = (void*)((char*)kernel_buffer + i * PGSIZE);
+    frame_free(kpage);  // Remove from frame list before freeing
+  }
+
+  // palloc_free_multiple(kernel_buffer, page_count);
 
   #ifdef VM
   // Unpin after copying is complete
@@ -848,7 +955,7 @@ mmap_handler(int fd, void *addr)
     spte->vaddr = page_addr;
     spte->writable = true;
     spte->status = IN_FILESYS;
-    spte->source = SOURCE_FILE;
+    spte->source = SOURCE_MMAP;
     lock_init(&spte->page_lock);
 
     lock_acquire(&filesys_lock);
