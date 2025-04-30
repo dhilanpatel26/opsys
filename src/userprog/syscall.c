@@ -22,6 +22,7 @@
 
 #ifdef VM
 #include "vm/mmap.h"
+#include "vm/page.h"
 #endif
 
 static void syscall_handler (struct intr_frame *);
@@ -954,7 +955,7 @@ mmap_handler(int fd, void *addr)
     spte->vaddr = page_addr;
     spte->writable = true;
     spte->status = IN_FILESYS;
-    spte->source = SOURCE_FILE;
+    spte->source = SOURCE_MMAP;
     lock_init(&spte->page_lock);
 
     lock_acquire(&filesys_lock);

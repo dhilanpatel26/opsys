@@ -17,6 +17,7 @@ enum page_status {
 
 enum page_source {
   SOURCE_FILE,
+  SOURCE_MMAP,
   SOURCE_SWAP,
   SOURCE_ZERO
 };

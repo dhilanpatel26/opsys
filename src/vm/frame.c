@@ -13,6 +13,8 @@
 
 #ifdef VM
 #include "vm/swap.h"
+// Filesystem lock for writing back mmap pages
+extern struct lock filesys_lock;
 #endif
 
 static int total_frames = 0;
@@ -109,92 +111,6 @@ frame_allocate(enum palloc_flags flags, struct sup_page_table_entry *spte)
   return kpage;
 }
 
-// static void *
-// frame_evict(void) 
-// {
-// #ifdef USERPROG
-//   static struct list_elem *clock_ptr = NULL;
-//   struct frame_entry *f;
-  
-//   /* Scan for a frame to evict */
-//   size_t iterations = 0;
-//   size_t num_frames = list_size(&frame_list);
-  
-//   while (iterations < 2 * num_frames) {
-//     /* Precondition: Must hold frame_table_lock while scanning (frame_allocate acquired) */
-//     if (clock_ptr == NULL || clock_ptr == list_end(&frame_list))
-//       clock_ptr = list_begin(&frame_list);
-      
-//     f = list_entry(clock_ptr, struct frame_entry, elem);
-//     clock_ptr = list_next(clock_ptr);
-    
-//     /* Skip pinned frames */
-//     if (f->pinned)
-//       continue;
-      
-//     /* Try to acquire the page lock for this frame's SPT entry */
-//     if (!lock_try_acquire(&f->spte->page_lock)) {
-//       /* Skip if we can't get the lock without blocking */
-//       iterations++;
-//       continue;
-//     }
-      
-//     /* Check accessed bit */
-//     if (pagedir_is_accessed(f->owner->pagedir, f->spte->vaddr)) {
-//       /* Give a second chance */
-//       pagedir_set_accessed(f->owner->pagedir, f->spte->vaddr, false);
-//       lock_release(&f->spte->page_lock);
-//     } else {
-//       /* Evict this frame - we hold both the frame table lock and the page lock */
-//       void *kpage = f->kpage;
-      
-//       /* If dirty, write to swap */
-
-//       // this is through the user page directory, so we need to make sure 
-//       // that the kernel always uses the user page directory to access the page.
-//       // need to modify syscall accordingly (some translations right, some wrong).
-//       if (pagedir_is_dirty(f->owner->pagedir, f->spte->vaddr) ||
-//           pagedir_is_dirty(thread_current()->pagedir, kpage)) {
-//         extern bool swap_available;
-//         if (!swap_available) {
-//           lock_release(&f->spte->page_lock);
-//           continue; // Skip this frame, can't swap
-//         }
-
-//         /* Temporarily release frame table lock during I/O for parallelism */
-//         lock_release(&frame_table_lock);
-        
-//         /* Do swap I/O while holding only the page lock */
-//         f->spte->swap_index = swap_out(kpage);
-//         f->spte->status = IN_SWAP;
-        
-//         /* Reacquire frame table lock */
-//         lock_acquire(&frame_table_lock);
-//       } else if (f->spte->source == SOURCE_FILE) {
-//         /* Clean page from file, just update status */
-//         /* No need to write back to file */
-//         f->spte->status = IN_FILESYS;
-//       }
-      
-//       /* Remove mapping from page table */
-//       pagedir_clear_page(f->owner->pagedir, f->spte->vaddr);
-      
-//       /* Update SPT and release page lock */
-//       lock_release(&f->spte->page_lock);
-      
-//       /* Remove from frame table */
-//       list_remove(&f->elem);
-//       free(f);
-      
-//       return kpage;
-//     }
-    
-//     iterations++;
-//   }
-// #endif
-//   return NULL; /* Could not evict any frame */
-// }
-
 /* Called with frame_table_lock held. Do not release. */
 static void *
 frame_evict(bool reuse) 
@@ -270,66 +186,79 @@ frame_evict(bool reuse)
       
       // printf("DEBUG: Evicting frame %p (not recently accessed)\n", kpage);
       
-      /* If dirty, write to swap */
+      /* If dirty, handle based on source */
       if (pagedir_is_dirty(f->owner->pagedir, f->spte->vaddr) ||
           pagedir_is_dirty(thread_current()->pagedir, kpage)) {
-        extern bool swap_available;
-        if (!swap_available && 0) {
-          // printf("DEBUG: Cannot evict frame %p - swap not available\n", kpage);
-          lock_release(&f->spte->page_lock);
-          iterations++;
-          clock_ptr = list_next(clock_ptr);
-          continue; // Skip this frame, can't swap
-        }
-
-        // printf("DEBUG: Writing dirty frame %p to swap\n", kpage);
-        
-        /* Pin frame to prevent race conditions when we release the frame table lock */
-        f->pinned = true;
-        pinned_frames++;
-
-        /* Save critical values locally before releasing lock */
-        void *local_kpage = kpage;
-        struct sup_page_table_entry *local_spte = f->spte;
-
-        /* Temporarily release frame table lock during I/O for parallelism */
-        // intr_enable();
-        lock_release(&frame_table_lock);
-        
-        /* Still holding page_lock */
-        swap_index_t swap_idx = swap_out(local_kpage);
-              
-        /* Reacquire frame table lock */
-        lock_acquire(&frame_table_lock);
-        // intr_disable();
-
-        /* Verify frame still exists and is valid */
-        bool frame_still_valid = false;
-        struct list_elem *e;
-        for (e = list_begin(&frame_list); e != list_end(&frame_list); e = list_next(e)) {
-          struct frame_entry *check_f = list_entry(e, struct frame_entry, elem);
-          if (check_f == f && check_f->kpage == local_kpage) {
-            frame_still_valid = true;
-            break;
+        if (f->spte->source == SOURCE_MMAP) {
+          /* Write modified mmap page back to file */
+          f->pinned = true;
+          pinned_frames++;
+          void *local_kpage = kpage;
+          struct sup_page_table_entry *local_spte = f->spte;
+          /* Release frame table lock for I/O */
+          lock_release(&frame_table_lock);
+          lock_acquire(&filesys_lock);
+          file_seek(local_spte->file, local_spte->file_offset);
+          file_write(local_spte->file, local_kpage, local_spte->read_bytes);
+          lock_release(&filesys_lock);
+          /* Reacquire lock */
+          lock_acquire(&frame_table_lock);
+          /* Update status */
+          local_spte->status = IN_FILESYS;
+        } else {
+          /* Existing swap logic */
+          extern bool swap_available;
+          if (!swap_available && 0) {
+            lock_release(&f->spte->page_lock);
+            iterations++;
+            clock_ptr = list_next(clock_ptr);
+            continue; // Skip this frame, can't swap
           }
-        }
-        
-        if (!frame_still_valid) {
-          /* Frame was removed while we were swapping - abort this eviction */
-          // printf("DEBUG: Frame was invalidated during swap I/O\n");
-          lock_release(&local_spte->page_lock);
-          clock_ptr = list_next(clock_ptr);
-          iterations++;
-          continue;
-        }
-        
-        /* Safe to update frame now */
-        f->spte->swap_index = swap_idx;
-        f->spte->status = IN_SWAP;
 
-      } else if (f->spte->source == SOURCE_FILE) {
-        /* Clean page from file, just update status */
-        // printf("DEBUG: Clean frame %p from file, no need to write back\n", kpage);
+          // printf("DEBUG: Writing dirty frame %p to swap\n", kpage);
+           
+          /* Pin frame to prevent race conditions when we release the frame table lock */
+          f->pinned = true;
+          pinned_frames++;
+
+          /* Save critical values locally before releasing lock */
+          void *local_kpage = kpage;
+          struct sup_page_table_entry *local_spte = f->spte;
+
+          /* Temporarily release frame table lock during I/O for parallelism */
+          lock_release(&frame_table_lock);
+
+          /* Still holding page_lock */
+          swap_index_t swap_idx = swap_out(local_kpage);
+                 
+          /* Reacquire frame table lock */
+          lock_acquire(&frame_table_lock);
+
+          /* Verify frame still exists and is valid */
+          bool frame_still_valid = false;
+          struct list_elem *e;
+          for (e = list_begin(&frame_list); e != list_end(&frame_list); e = list_next(e)) {
+            struct frame_entry *check_f = list_entry(e, struct frame_entry, elem);
+            if (check_f == f && check_f->kpage == local_kpage) {
+              frame_still_valid = true;
+              break;
+            }
+          }
+          
+          if (!frame_still_valid) {
+            /* Frame was removed while we were swapping - abort this eviction */
+            lock_release(&local_spte->page_lock);
+            clock_ptr = list_next(clock_ptr);
+            iterations++;
+            continue;
+          }
+          
+          /* Safe to update frame now */
+          f->spte->swap_index = swap_idx;
+          f->spte->status = IN_SWAP;
+        }
+      } else if (f->spte->source == SOURCE_FILE || f->spte->source == SOURCE_MMAP) {
+        /* Clean file-backed page or mmap: just update status */
         f->spte->status = IN_FILESYS;
       }
       
@@ -530,26 +459,6 @@ void frame_free_thread_frames(struct thread *t) {
   lock_release(&frame_table_lock);
 }
 #endif
-
-// void *
-// frame_palloc_get_multiple(enum palloc_flags flags, size_t page_count) 
-// {
-//   lock_acquire(&frame_table_lock);
-//   for (size_t i = 0; i < page_count * 2; i++) {
-//     if (frame_evict(false) == NULL) {
-//       // If we can't evict a frame, release the lock and return NULL
-//       // printf("DEBUG: Frame eviction failed on iteration %zu\n", i);
-//       lock_release(&frame_table_lock);
-//       return NULL;
-//     }
-//   }
-
-//   // retry allocation after eviction (hopefully not null)
-//   void *buffer = palloc_get_multiple(flags, page_count);
-//   // printf("DEBUG: buffer = %p, page_count = %zu\n", buffer, page_count);
-//   lock_release(&frame_table_lock);
-//   return buffer;
-// }
 
 // use for kernel-only frames (no spte) only, no page installation... ok?
 void *frame_palloc_get_multiple(enum palloc_flags flags, size_t page_count) {
