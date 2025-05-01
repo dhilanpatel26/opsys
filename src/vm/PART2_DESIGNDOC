@@ -20,6 +20,7 @@ Katherine Forbes <kforbes6@jhu.edu>
 >> Please cite any offline or online sources you consulted while
 >> preparing your submission, other than the Pintos documentation, course
 >> text, lecture notes, and course staff.
+GitHub Copilot for code completion.
 
           STACK GROWTH
           =====================
@@ -32,7 +33,8 @@ Katherine Forbes <kforbes6@jhu.edu>
 
 Added to struct thread in thread.h:
 - void *esp;
-  - Purpose: Saves user stack pointer during syscall entry to support stack growth on kernel-mode.
+  - Purpose: Saves user stack pointer during syscall entry to support stack growth on kernel-mode. 
+    We set thread_current()->esp = f->esp in the page fault handler to ensure proper validation.
 
 Added to syscall.h:
 - #define MAX_STACK_SIZE (8 * 1024 * 1024)
@@ -45,9 +47,9 @@ Added to syscall.h:
 >> the page that faulted.
 
 We define a heuristic valid_stack_access. There, it checks 
-1) Fault address is in the user address space
-2) The fault is close enough to the current stack pointer (32 bytes at most) because a legitimate access 
-   like PUSH/PUSHA can access at most that much
+1) Fault address is in the user address space.
+2) The fault is close enough to the current stack pointer (within 32 bytes) because a legitimate access 
+   like PUSH/PUSHA will require at most that much memory before a page fault.
 3) The attempt is at most 8MB stack from physical base (a valid allocation within stack limit).
 
           MEMORY MAPPED FILES
