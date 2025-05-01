@@ -308,7 +308,6 @@ kernel_buffer_copy (const void *user_buffer, unsigned length) {
         frame_free(kpage); // also palloc_frees
       }
 
-      // palloc_free_multiple(kernel_buffer, page_count);
       // printf("kernel_buffer_copy: get_user failed at byte %u\n", i);
       return NULL;
     }
@@ -352,13 +351,6 @@ write_handler (int fd, const void *user_buffer, unsigned length) {
     }
   }
   #endif
-
-  // int retries = 0;
-  // while (!validate_buffer(user_buffer, length) && retries < 3) {
-  //   // printf("Buffer validation failed, retrying (%d/3)\n", retries + 1);
-  //   retries++;
-  //   thread_yield();
-  // }
 
   if(!validate_buffer(user_buffer, length)){
     // printf("write_handler: validate_buffer failed\n");
@@ -416,8 +408,6 @@ write_handler (int fd, const void *user_buffer, unsigned length) {
       frame_free(kpage);  // Remove from frame list before freeing
     }
 
-    // palloc_free_multiple(kernel_buffer, page_count);
-
     #ifdef VM
     // Unpin after copy is complete
     for (unsigned i = 0; i < length; i += PGSIZE) {
@@ -460,8 +450,6 @@ write_handler (int fd, const void *user_buffer, unsigned length) {
     void *kpage = (void*)((char*)kernel_buffer + i * PGSIZE);
     frame_free(kpage);  // Remove from frame list before freeing
   }
-
-  // palloc_free_multiple(kernel_buffer, page_count);
 
   #ifdef VM
   // Unpin buffer pages
@@ -706,8 +694,6 @@ read_handler(int fd, void *user_buffer, unsigned length) {
           void *kpage = (void*)((char*)kernel_buffer + i * PGSIZE);
           frame_free(kpage);  // Remove from frame list before freeing
         }
-
-        // palloc_free_multiple(kernel_buffer, page_count);
         return -1;
       }
     }
@@ -717,7 +703,6 @@ read_handler(int fd, void *user_buffer, unsigned length) {
       frame_free(kpage);  // Remove from frame list before freeing
     }
 
-    // palloc_free_multiple(kernel_buffer, page_count);
     return i;
   }
 
@@ -749,8 +734,6 @@ read_handler(int fd, void *user_buffer, unsigned length) {
           void *kpage = (void*)((char*)kernel_buffer + i * PGSIZE);
           frame_free(kpage);  // Remove from frame list before freeing
         }
-
-        // palloc_free_multiple(kernel_buffer, page_count);
         return -1;
       }
     }
@@ -760,8 +743,6 @@ read_handler(int fd, void *user_buffer, unsigned length) {
     void *kpage = (void*)((char*)kernel_buffer + i * PGSIZE);
     frame_free(kpage);  // Remove from frame list before freeing
   }
-
-  // palloc_free_multiple(kernel_buffer, page_count);
 
   #ifdef VM
   // Unpin after copying is complete
@@ -987,11 +968,6 @@ mmap_handler(int fd, void *addr)
   mapid_t mapid = mmap_add(reopened_file, addr, page_count);
   if (mapid == -1)
   {
-    // clean up on failure
-    // lock_acquire(&filesys_lock);
-    // file_close(reopened_file);
-    // lock_release(&filesys_lock);
-    
     // remove pages from supplemental page table
     void *cleanup_addr = addr;
     struct sup_page_table_entry *spte;

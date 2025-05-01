@@ -300,8 +300,6 @@ process_exit (void)
   struct process_descriptor *procdesc = cur->procdesc;
   ASSERT (procdesc != NULL);
 
-  // TODO: may have to omit args, depending on how
-  // file_name was processed in process_execute
   if (!procdesc->exited) {
     printf("%s: exit(%d)\n", thread_name(), procdesc->exit_status);
     procdesc->exited = true;
@@ -323,7 +321,6 @@ process_exit (void)
     bool child_should_free = (childpd->ref_count == 0);
     lock_release(&childpd->ref_lock);
 
-    // is this even necessary? list gets destroyed anwyways
     list_remove(e);
   
     if (child_should_free) {
@@ -713,13 +710,6 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 static bool
 setup_stack_args_helper (void **esp, const char *file_name) 
 {
-  // char *fn_copy = palloc_get_page(0);
-  // if (fn_copy == NULL) {
-  //   return false;
-  // }
-
-  // strlcpy(fn_copy, file_name, PGSIZE);
-
   char *token;
   char *save_ptr;
 
@@ -811,7 +801,6 @@ setup_stack_args_helper (void **esp, const char *file_name)
   *esp -= 4;
   *(void**)*esp = (void*)0;
 
-  // palloc_free_page(fn_copy);
   free(fn_copy);
 
   // printf("Arguments setup complete. Stack contents:\n");

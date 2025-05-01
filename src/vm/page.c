@@ -95,7 +95,6 @@ load_page(struct sup_page_table_entry *spte)
         /* Some to read, potentially some to zero */
 
         // already pinned
-        // frame_pin(kpage);  /* Prevent eviction during I/O */
 
         /* File I/O doesn't need frame table lock */
         lock_acquire(&filesys_lock);
