@@ -1,0 +1,17 @@
+#ifndef VM_SWAP_H
+#define VM_SWAP_H
+
+#include <bitmap.h>
+#include "devices/block.h"
+
+/* Type for swap slot index */
+typedef size_t swap_index_t;
+
+extern bool swap_available;
+
+void swap_init(void);
+swap_index_t swap_out(void *page);
+void swap_in(swap_index_t swap_index, void *page);
+void swap_free(swap_index_t swap_index);
+
+#endif

@@ -16,6 +16,14 @@
 #include "lib/kernel/stdio.h"
 #include "threads/palloc.h"
 #include "devices/shutdown.h"
+#include "vm/frame.h"
+#include "threads/malloc.h"
+#include "vm/page.h"
+
+#ifdef VM
+#include "vm/mmap.h"
+#include "vm/page.h"
+#endif
 
 static void syscall_handler (struct intr_frame *);
 static int wait_handler (int pid);
@@ -34,6 +42,13 @@ static unsigned tell_handler(int fd);
 static int write_handler (int fd, const void *buffer, unsigned length);
 static bool validate_buffer (const void *buffer, unsigned length);
 
+#ifdef VM
+static mapid_t mmap_handler(int fd, void *addr);
+static void munmap_handler(mapid_t mapping);
+#endif
+
+static struct file *get_file(int fd);
+
 struct lock filesys_lock; // filesys code is a critical section
 
 
@@ -48,10 +63,17 @@ syscall_init (void)
 static void
 syscall_handler (struct intr_frame *f) 
 {  
+  // printf("system call!\n");
+
   // relevant stack data is 4 bytes and aligned
   int *esp = f->esp; // user virtual memory
-
+  #ifdef VM
+    thread_current()->esp = f->esp;
+  #endif
   int syscall_number = *(int*) translate_uvaddr(esp);
+
+  // printf("syscall: %d\n", syscall_number);
+
   translate_uvaddr((void*)((char*)esp + 3)); // ensure entire syscall number is valid
 
   switch (syscall_number) {
@@ -63,8 +85,13 @@ syscall_handler (struct intr_frame *f)
       return;
     }
     case SYS_EXIT: {
-      int status = *(int*) translate_uvaddr(esp + 1);
-      translate_uvaddr((void*)((char*)esp + 7));
+      // When reading an int, we should validate all 4 of its bytes
+      // Read the exit status byte by byte to handle page boundary crossing
+      int status = 0;
+      for (int i = 0; i < 4; i++) {
+        uint8_t *byte_ptr = (uint8_t*)translate_uvaddr((void*)((char*)(esp + 1) + i));
+        status |= ((*byte_ptr) << (i * 8));
+      }
       exit_handler(status);
       NOT_REACHED();
     }
@@ -149,6 +176,7 @@ syscall_handler (struct intr_frame *f)
       translate_uvaddr((void*)((char*)esp + 15));
       int bytes_written = write_handler(fd, buffer, length);
       f->eax = bytes_written;
+      // printf("write_handler returned %d bytes\n", bytes_written);
       return;
     }
     case SYS_HALT: {
@@ -156,6 +184,23 @@ syscall_handler (struct intr_frame *f)
       NOT_REACHED();
       return;
     }
+    #ifdef VM
+    case SYS_MMAP: {
+      int fd = *(int *) translate_uvaddr(esp + 1);
+      translate_uvaddr((void*)((char*)esp + 7));
+      void *addr = *(void **) translate_uvaddr(esp + 2);
+      translate_uvaddr((void*)((char*)esp + 11));
+      f->eax = mmap_handler(fd, addr);
+      return;
+    }
+    case SYS_MUNMAP: {
+      mapid_t mapping = *(mapid_t *) translate_uvaddr(esp + 1);
+      translate_uvaddr((void*)((char*)esp + 7));
+      munmap_handler(mapping);
+      return;
+    }
+    #endif
+
     default:
       NOT_REACHED();
   }
@@ -189,30 +234,36 @@ put_user (uint8_t *udst, uint8_t byte)
 static bool
 validate_buffer (const void *buffer, unsigned length) {
   if (buffer == NULL) {
+    // printf("buffer is NULL\n");
     return false;
   }
 
   if (length == 0) {
+    // printf("length is 0\n");
     return true;
   }
 
   // check if buffer is a user vaddr
   if (!is_user_vaddr(buffer) || !is_user_vaddr(buffer + length - 1)) {
+    // printf("buffer is not a user vaddr\n");
     return false;
   }
 
   const uint8_t *buf = (const uint8_t *) buffer;
   if (get_user(buf) == -1) {
+    // printf("get_user failed, buf = %p\n", buf);
     return false;
   }
 
   if (length > 1 && get_user(buf + length - 1) == -1) {
+    // printf("get_user failed at end of buffer\n");
     return false;
   }
 
   // check the bytes at the page boundaries
   for (unsigned i = PGSIZE; i < length; i += PGSIZE) {
     if (get_user(buf + i) == -1) {
+      // printf("get_user failed at page boundary\n");
       return false;
     }
   }
@@ -222,19 +273,24 @@ validate_buffer (const void *buffer, unsigned length) {
 
 static void *
 kernel_buffer_copy (const void *user_buffer, unsigned length) {
+
+  // follows method of only accessing through user page table
+
   if (length == 0) {
+    // printf("kernel_buffer_copy: length is 0\n");
     return NULL;
   }
 
   // buffer is a user vaddr
   if (!validate_buffer(user_buffer, length)) {
+    // printf("kernel_buffer_copy: validate_buffer failed\n");
     return NULL;
   }
 
   // calculate how many pages we need based on whats in the buffer
   size_t page_count = (length + PGSIZE - 1) / PGSIZE;
 
-  void *kernel_buffer = palloc_get_multiple(0, page_count);
+  void *kernel_buffer = frame_palloc_get_multiple(PAL_USER | PAL_ZERO, page_count);
   if (kernel_buffer == NULL) {
     return NULL;
   }
@@ -246,10 +302,20 @@ kernel_buffer_copy (const void *user_buffer, unsigned length) {
   for (unsigned i = 0; i < length; i++) {
     int byte = get_user((const uint8_t *)source + i);
     if (byte == -1) {
-      palloc_free_multiple(kernel_buffer, page_count);
+
+      for (size_t i = 0; i < page_count; i++) {
+        void *kpage = (void*)((char*)kernel_buffer + i * PGSIZE);
+        frame_free(kpage); // also palloc_frees
+      }
+
+      // printf("kernel_buffer_copy: get_user failed at byte %u\n", i);
       return NULL;
     }
     dst[i] = (uint8_t)byte;
+  }
+
+  if (kernel_buffer == NULL) {
+    // printf("kernel_buffer_copy: kernel_buffer is NULL after copy\n");
   }
 
   return kernel_buffer;
@@ -257,50 +323,107 @@ kernel_buffer_copy (const void *user_buffer, unsigned length) {
 
 static int
 write_handler (int fd, const void *user_buffer, unsigned length) {
+
+  // printf("write_handler called\n");
+
   if (length == 0) {
     return 0;
   }
 
-  // Loop 1: Before buffer validation
-  // for(;;);
+  #ifdef VM
+  // Pre-load all pages in the buffer range
+  void *start_addr = pg_round_down(user_buffer);
+  void *end_addr = pg_round_down((uint8_t*)user_buffer + length - 1);
+
+  for (void *page_addr = start_addr; page_addr <= end_addr; page_addr += PGSIZE) {
+    struct sup_page_table_entry *spte = 
+      sup_page_table_lookup(&thread_current()->spt, page_addr);
+    if (spte != NULL) {
+      lock_acquire(&spte->page_lock);
+      if (spte->status != IN_MEMORY) {
+        bool success = load_page(spte);
+        if (!success) {
+          lock_release(&spte->page_lock);
+          return -1;
+        }
+      }
+      lock_release(&spte->page_lock);
+    }
+  }
+  #endif
 
   if(!validate_buffer(user_buffer, length)){
+    // printf("write_handler: validate_buffer failed\n");
     exit_handler(-1);  // Terminate the process
     NOT_REACHED();
   }
 
-  // Loop 2: After buffer validation, before fd checks
-  // for(;;);
+  // printf("Buffer validated, length: %u\n", length);
 
   if (fd <= 0 || fd >= FILE_TABLE_SIZE) {
     return -1;
   }
   
-  // Loop 3: Before stdout handling
-  // for(;;);
   size_t page_count = (length + PGSIZE - 1) / PGSIZE;
+
+  #ifdef VM
+  // Pin the user buffer pages in memory to prevent eviction during copy
+  for (unsigned i = 0; i < length; i += PGSIZE) {
+    void *page_addr = pg_round_down((uint8_t*)user_buffer + i);
+    struct sup_page_table_entry *spte = 
+      sup_page_table_lookup(&thread_current()->spt, page_addr);
+    if (spte != NULL) {
+      void *kpage = pagedir_get_page(thread_current()->pagedir, page_addr);
+      if (kpage != NULL)
+        frame_pin(kpage);
+    }
+  }
+  #endif
+
+  // printf("User buffer pinned, page count: %zu\n", page_count);
 
   if (fd == 1) {
     void *kernel_buffer = kernel_buffer_copy(user_buffer, length);
     if (kernel_buffer == NULL) {
+      #ifdef VM
+      // Unpin buffer pages if copy failed
+      for (unsigned i = 0; i < length; i += PGSIZE) {
+        void *page_addr = pg_round_down((uint8_t*)user_buffer + i);
+        struct sup_page_table_entry *spte = 
+          sup_page_table_lookup(&thread_current()->spt, page_addr);
+        if (spte != NULL) {
+          void *kpage = pagedir_get_page(thread_current()->pagedir, page_addr);
+          if (kpage != NULL)
+            frame_unpin(kpage);
+        }
+      }
+      #endif
       return -1;
     }
-
-    // // Manually copy the first few bytes to be ultra-safe
-    // char safe_buffer[256];
-    // for (unsigned i = 0; i < length; i++) {
-    //   void *src_ptr = translate_uvaddr((void*)((char*)user_buffer + i));
-    //   safe_buffer[i] = *(char*)src_ptr;
-    // }
-
+    
     putbuf(kernel_buffer, length);
-    // putbuf(safe_buffer, length);
-    palloc_free_multiple(kernel_buffer, page_count);
+
+    for (size_t i = 0; i < page_count; i++) {
+      void *kpage = (void*)((char*)kernel_buffer + i * PGSIZE);
+      frame_free(kpage);  // Remove from frame list before freeing
+    }
+
+    #ifdef VM
+    // Unpin after copy is complete
+    for (unsigned i = 0; i < length; i += PGSIZE) {
+      void *page_addr = pg_round_down((uint8_t*)user_buffer + i);
+      struct sup_page_table_entry *spte = 
+        sup_page_table_lookup(&thread_current()->spt, page_addr);
+      if (spte != NULL) {
+        void *kpage = pagedir_get_page(thread_current()->pagedir, page_addr);
+        if (kpage != NULL)
+          frame_unpin(kpage);
+      }
+    }
+    #endif
+
     return length;
   }
-
-  // Loop 4: Before file operations
-  // for(;;);
 
   struct thread *cur = thread_current();
 
@@ -311,25 +434,48 @@ write_handler (int fd, const void *user_buffer, unsigned length) {
 
   void *kernel_buffer = kernel_buffer_copy(user_buffer, length);
   if (kernel_buffer == NULL) {
+    // printf("write_handler: kernel_buffer_copy failed\n");
     return -1;
   }
 
-  // Loop 5: Before actual file write
-  // for(;;);
+  // printf("DEBUG: Kernel buffer copied, length: %u\n", length);
 
   lock_acquire(&filesys_lock);
   int bytes_written = file_write(file, kernel_buffer, length);
   lock_release(&filesys_lock);
+
+  // printf("DEBUG: Bytes written: %d\n", bytes_written);
   
-  palloc_free_multiple(kernel_buffer, page_count);
+  for (size_t i = 0; i < page_count; i++) {
+    void *kpage = (void*)((char*)kernel_buffer + i * PGSIZE);
+    frame_free(kpage);  // Remove from frame list before freeing
+  }
+
+  #ifdef VM
+  // Unpin buffer pages
+  for (unsigned i = 0; i < length; i += PGSIZE) {
+    void *page_addr = pg_round_down((uint8_t*)user_buffer + i);
+    struct sup_page_table_entry *spte = 
+      sup_page_table_lookup(&thread_current()->spt, page_addr);
+    if (spte != NULL) {
+      void *kpage = pagedir_get_page(thread_current()->pagedir, page_addr);
+      if (kpage != NULL)
+        frame_unpin(kpage);
+    }
+  }
+  #endif
+
+  // printf("DEBUG: Kernel buffer freed\n");
+
   return (bytes_written >= 0) ? bytes_written : -1;
 }
 
 static int
 close_handler (int fd)
 {
-  // closing stdin or stdout is invalid
-  if (fd < 2 || fd >= FILE_TABLE_SIZE) {
+  // closing stdin or stdout is invalid, as well as an already exited thread
+  if (fd < 2 || fd >= FILE_TABLE_SIZE || thread_current()->fd_table[fd] == NULL) {
+     // printf("Invalid file descriptor\n");
     return -1;
   }
   struct thread *cur = thread_current();
@@ -443,24 +589,99 @@ filesize_handler(int fd){
 
 static int
 read_handler(int fd, void *user_buffer, unsigned length) {
+  
+  // printf("read_handler called\n");
+
   if (length == 0) {
     return 0;
   }
 
+  // printf("user_buffer: %p\n", user_buffer);
+
+  // Basic address validity check before anything else
+  if (user_buffer == NULL || !is_user_vaddr(user_buffer) || 
+      !is_user_vaddr(user_buffer + length - 1)) {
+    // printf("invalid buffer address range\n");
+    exit_handler(-1);
+    NOT_REACHED();
+  }
+
+  #ifdef VM
+  // For read operations, ensure all buffer pages exist BEFORE validation
+  // We need to calculate the precise page range needed for the buffer
+  void *start_addr = pg_round_down(user_buffer);
+  void *end_addr = pg_round_down((uint8_t*)user_buffer + length - 1);
+
+  // Loop through all pages from start to end inclusive
+  for (void *page_addr = start_addr; page_addr <= end_addr; page_addr += PGSIZE) {
+    struct sup_page_table_entry *spte = 
+        sup_page_table_lookup(&thread_current()->spt, page_addr);
+    /* Read buffers don't need to be allocated a frame but they
+       do need a SPT entry -- SPTEs should only be created at load. */
+    if (spte == NULL) {
+      if (valid_stack_access(page_addr, thread_current()->esp)) {
+        spte = malloc(sizeof *spte);
+        if (spte == NULL) exit_handler(-1);
+        spte->vaddr = page_addr;
+        spte->writable = true;
+        spte->status = NOT_LOADED;
+        spte->source = SOURCE_ZERO;
+        lock_init(&spte->page_lock);
+        if (!sup_page_table_insert(&thread_current()->spt, spte)) {
+          free(spte);
+          exit_handler(-1);
+        }
+      } else {
+        exit_handler(-1);
+        NOT_REACHED();
+      }
+    }
+
+    // Force load the page before validation
+    lock_acquire(&spte->page_lock);
+    if (spte->status != IN_MEMORY) {
+      bool success = load_page(spte);
+      lock_release(&spte->page_lock);
+      if (!success) {
+        exit_handler(-1);
+        NOT_REACHED();
+      }
+    } else {
+      lock_release(&spte->page_lock);
+    }
+  }
+  #endif
+
   if (!validate_buffer(user_buffer, length)) {
+    // printf("invalid buffer\n");
     exit_handler(-1);  // Terminate the process
     NOT_REACHED();
   }
+
+  #ifdef VM
+  // Pin the user buffer pages in memory to prevent eviction during copy
+  for (unsigned i = 0; i < length; i += PGSIZE) {
+    void *page_addr = pg_round_down((uint8_t*)user_buffer + i);
+    struct sup_page_table_entry *spte = 
+      sup_page_table_lookup(&thread_current()->spt, page_addr);
+    if (spte != NULL) {
+      void *kpage = pagedir_get_page(thread_current()->pagedir, page_addr);
+      if (kpage != NULL)
+        frame_pin(kpage);
+    }
+  }
+  #endif
 
   size_t page_count = (length + PGSIZE - 1) / PGSIZE;
 
   struct thread *cur = thread_current();
   if (fd == 0) {
     // read from stdin
-    void *kernel_buffer = palloc_get_multiple(0, page_count);
+    void *kernel_buffer = frame_palloc_get_multiple(PAL_USER | PAL_ZERO, page_count);
     if (kernel_buffer == NULL) {
       return -1;
     }
+
     unsigned i;
     for (i = 0; i < length; i++) {
       ((uint8_t*) kernel_buffer)[i] = input_getc();
@@ -468,12 +689,20 @@ read_handler(int fd, void *user_buffer, unsigned length) {
 
     for (unsigned j = 0; j < i; j++) {
       if (!put_user((uint8_t*) user_buffer + j, ((uint8_t*) kernel_buffer)[j])) {
-        palloc_free_multiple(kernel_buffer, page_count);
+
+        for (size_t i = 0; i < page_count; i++) {
+          void *kpage = (void*)((char*)kernel_buffer + i * PGSIZE);
+          frame_free(kpage);  // Remove from frame list before freeing
+        }
         return -1;
       }
     }
 
-    palloc_free_multiple(kernel_buffer, page_count);
+    for (size_t i = 0; i < page_count; i++) {
+      void *kpage = (void*)((char*)kernel_buffer + i * PGSIZE);
+      frame_free(kpage);  // Remove from frame list before freeing
+    }
+
     return i;
   }
 
@@ -488,7 +717,7 @@ read_handler(int fd, void *user_buffer, unsigned length) {
   }
 
   
-  void *kernel_buffer = palloc_get_multiple(0, page_count);
+  void *kernel_buffer = frame_palloc_get_multiple(PAL_USER | PAL_ZERO, page_count);
   if (kernel_buffer == NULL) {
     return -1;
   }
@@ -500,13 +729,35 @@ read_handler(int fd, void *user_buffer, unsigned length) {
   if (bytes_read > 0) {
     for (int i = 0; i < bytes_read; i++) {
       if (!put_user((uint8_t*) user_buffer + i, ((uint8_t*) kernel_buffer)[i])) {
-        palloc_free_multiple(kernel_buffer, page_count);
+
+        for (size_t i = 0; i < page_count; i++) {
+          void *kpage = (void*)((char*)kernel_buffer + i * PGSIZE);
+          frame_free(kpage);  // Remove from frame list before freeing
+        }
         return -1;
       }
     }
   }
 
-  palloc_free_multiple(kernel_buffer, page_count);
+  for (size_t i = 0; i < page_count; i++) {
+    void *kpage = (void*)((char*)kernel_buffer + i * PGSIZE);
+    frame_free(kpage);  // Remove from frame list before freeing
+  }
+
+  #ifdef VM
+  // Unpin after copying is complete
+  for (unsigned i = 0; i < length; i += PGSIZE) {
+    void *page_addr = pg_round_down((uint8_t*)user_buffer + i);
+    struct sup_page_table_entry *spte = 
+      sup_page_table_lookup(&thread_current()->spt, page_addr);
+    if (spte != NULL) {
+      void *kpage = pagedir_get_page(thread_current()->pagedir, page_addr);
+      if (kpage != NULL)
+        frame_unpin(kpage);
+    }
+  }
+  #endif
+  
   return (bytes_read >= 0) ? bytes_read : -1; 
 }
 
@@ -559,20 +810,52 @@ validate_string(const char *str) {
 static void *
 translate_uvaddr(void *uptr) {
   if (uptr == NULL || !is_user_vaddr(uptr)) {
+    // printf("Invalid user virtual address (1): %p\n", uptr);
     exit_handler(-1); // invalid memory access, segfault
     NOT_REACHED();
   }
 
   if (get_user((uint8_t*) uptr) == -1) {
+    // printf("Invalid user virtual address (2): %p\n", uptr);
     exit_handler(-1); // invalid memory access, segfault
     NOT_REACHED();
   }
   
   void *kptr = pagedir_get_page(thread_current()->pagedir, uptr);
-  if (kptr == NULL) {
+    if (kptr == NULL) {
+    #ifdef VM
+    void *page_addr = pg_round_down(uptr);
+    struct sup_page_table_entry *spte = 
+      sup_page_table_lookup(&thread_current()->spt, page_addr);
+
+    if (spte == NULL) {
+      // try to grow stack
+      if (valid_stack_access(uptr, thread_current()->esp)) {
+        spte = malloc(sizeof *spte);
+        if (spte == NULL) exit_handler(-1);
+        spte->vaddr = page_addr;
+        spte->writable = true;
+        spte->status = NOT_LOADED;
+        spte->source = SOURCE_ZERO;
+        lock_init(&spte->page_lock);
+        if (!sup_page_table_insert(&thread_current()->spt, spte)) {
+          free(spte);
+          exit_handler(-1);
+        }
+      } else {
+        exit_handler(-1);
+      }
+    }
+
+    return uptr; // let it page fault
+    #else
     exit_handler(-1); // invalid memory access, segfault
     NOT_REACHED();
+    #endif
   }
+
+  // accesses the kernel virtual address
+  // special bits only get set in the kernel page table
 
   return kptr;
 }
@@ -591,4 +874,138 @@ exit_handler (int status)
   
   // process cleanup handled by implicit process_exit
   thread_exit();
+}
+
+#ifdef VM
+// Memory mapping system calls
+static mapid_t
+mmap_handler(int fd, void *addr)
+{
+  // validate arguments
+  if (fd <= 1 || addr == NULL || pg_ofs(addr) != 0 || addr == 0)
+    return -1;
+    
+  // get file from file descriptor
+  struct file *file = get_file(fd);
+  if (file == NULL)
+    return -1;
+    
+  // get file size
+  lock_acquire(&filesys_lock);
+  off_t file_size = file_length(file);
+  lock_release(&filesys_lock);
+  
+  // check file size
+  if (file_size == 0)
+    return -1;
+    
+  // calculate number of pages needed
+  size_t page_count = (file_size + PGSIZE - 1) / PGSIZE;
+  
+  // check for overlap with existing pages
+  void *check_addr = addr;
+  for (size_t i = 0; i < page_count; i++, check_addr += PGSIZE)
+  {
+    // check if address is already mapped
+    if (sup_page_table_lookup(&thread_current()->spt, check_addr) != NULL)
+      return -1;
+      
+    // check if address is in stack region
+    if (check_addr >= PHYS_BASE - MAX_STACK_SIZE && check_addr < PHYS_BASE)
+      return -1;
+  }
+    
+  // add pages to supplemental page table
+  void *page_addr = addr;
+  off_t ofs = 0;
+  
+  for (size_t i = 0; i < page_count; i++, page_addr += PGSIZE, ofs += PGSIZE)
+  {
+    // calculate read bytes for this page
+    uint32_t read_bytes = (i == page_count - 1 && file_size % PGSIZE != 0) 
+                         ? file_size % PGSIZE : PGSIZE;
+    uint32_t zero_bytes = PGSIZE - read_bytes;
+    
+    /* Create and initialize SPTE */
+    struct sup_page_table_entry *spte = malloc(sizeof(struct sup_page_table_entry));
+    if (spte == NULL) {
+      /* Clean up on failure */
+      return -1;
+    }
+    
+    spte->vaddr = page_addr;
+    spte->writable = true;
+    spte->status = IN_FILESYS;
+    spte->source = SOURCE_MMAP;
+    lock_init(&spte->page_lock);
+
+    lock_acquire(&filesys_lock);
+    spte->file = file_reopen(file);  /* Each page gets its own file reference */
+    lock_release(&filesys_lock);
+
+    spte->file_offset = ofs;
+    spte->read_bytes = read_bytes;
+    spte->zero_bytes = zero_bytes;
+    
+    /* Insert into SPT */
+    if (!sup_page_table_insert(&thread_current()->spt, spte)) {
+      /* Clean up on failure */
+      if (spte->file != NULL) {
+        lock_acquire(&filesys_lock);
+        file_close(spte->file);
+        lock_release(&filesys_lock);
+      }
+      free(spte);
+      
+    }
+  }
+
+  lock_acquire(&filesys_lock);
+  struct file *reopened_file = file_reopen(file);
+  lock_release(&filesys_lock);
+  
+  // add mapping to mmap list
+  mapid_t mapid = mmap_add(reopened_file, addr, page_count);
+  if (mapid == -1)
+  {
+    // remove pages from supplemental page table
+    void *cleanup_addr = addr;
+    struct sup_page_table_entry *spte;
+
+    for (size_t i = 0; i < page_count; i++, cleanup_addr += PGSIZE) {
+      spte = sup_page_table_lookup(&thread_current()->spt, cleanup_addr);
+      if (spte != NULL) {
+        hash_delete(&thread_current()->spt, &spte->hash_elem);
+        spt_entry_free(&spte->hash_elem, NULL);  // Pass NULL as the second argument
+      }
+    }
+
+    lock_acquire(&filesys_lock);
+    file_close(reopened_file);
+    lock_release(&filesys_lock);
+    return -1;
+  }
+  
+  return mapid;
+}
+
+static void
+munmap_handler(mapid_t mapping)
+{
+  // validate mapping
+  if (mapping <= 0)
+    return;
+    
+  // remove mapping
+  mmap_remove(mapping);
+}
+#endif // VM
+
+static struct file *
+get_file(int fd)
+{
+  if (fd < 0 || fd >= FILE_TABLE_SIZE)
+    return NULL;
+    
+  return thread_current()->fd_table[fd];
 }

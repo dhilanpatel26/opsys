@@ -5,12 +5,23 @@
 #include "threads/interrupt.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
+#include "userprog/syscall.h"
+#include "threads/malloc.h"
+
+#ifdef USERPROG
+#include "userprog/pagedir.h"
+#endif
+
+#ifdef VM
+#include "vm/page.h"
+#endif
 
 /* Number of page faults processed. */
 static long long page_fault_cnt;
 
 static void kill (struct intr_frame *);
 static void page_fault (struct intr_frame *);
+bool valid_stack_access(void *fault_addr, void *esp);
 
 /* Registers handlers for interrupts that can be caused by user
    programs.
@@ -136,6 +147,14 @@ page_fault (struct intr_frame *f)
      [IA32-v3a] 5.15 "Interrupt 14--Page Fault Exception
      (#PF)". */
   asm ("movl %%cr2, %0" : "=r" (fault_addr));
+  #ifdef VM
+  thread_current()->esp = f->esp;
+  #endif
+
+//   #ifdef VM
+//    printf("Registers: eax=%08x, ebx=%08x, ecx=%08x, edx=%08x, eip=%08x, ebp=%08x, esp=%08x\n", 
+//           f->eax, f->ebx, f->ecx, f->edx, f->eip, f->ebp, f->esp);
+//   #endif
 
   /* Turn interrupts back on (they were only off so that we could
      be assured of reading CR2 before it changed). */
@@ -149,12 +168,91 @@ page_fault (struct intr_frame *f)
   write = (f->error_code & PF_W) != 0;
   user = (f->error_code & PF_U) != 0;
 
-  // case one: handle kernel access to user memory
+  // case one: handle kernel access to user memory (e.g. during syscall)
   if (!user && fault_addr < PHYS_BASE && is_user_vaddr(fault_addr)) {
+
+  // if this is a write to a read-only page...terminate process
+  if (!not_present && write) {
+    thread_exit();
+    NOT_REACHED();
+  }
+
    f->eip = (void*) f->eax;
    f->eax = 0xffffffff;
    return;
   }
+
+//   #ifdef VM
+//   printf("DEBUG: Page fault at %p (rounded: %p)\n", fault_addr, pg_round_down(fault_addr));
+//   printf("DEBUG: not_present=%d write=%d user=%d\n", not_present, write, user);
+//   #endif
+
+#ifdef VM
+/* Is this a valid page fault that can be handled by VM system? */
+  if (not_present) {
+   /* Round down to get page address */
+   void *page_addr = pg_round_down(fault_addr);
+   
+   // printf("DEBUG: Page fault at %p (rounded: %p)\n", fault_addr, page_addr);
+
+   /* Check if the page is in the supplemental page table */
+   struct sup_page_table_entry *spte = 
+      sup_page_table_lookup(&thread_current()->spt, page_addr);
+
+   // printf("DEBUG: SPT entry found: %p\n", spte);
+
+   /* If SPTE exists (it really should) */
+   if (spte != NULL) {
+      /* Lock SPTE while checking shared fields */
+      lock_acquire(&spte->page_lock);
+
+      /* If valid access */
+      if (!(write && !spte->writable)) {
+
+         bool success = load_page(spte);
+
+         lock_release(&spte->page_lock);
+
+         /* Don't need lock, using value that won't change */
+         if (success)
+            return;
+         
+      } else {
+         
+         lock_release(&spte->page_lock);
+      }
+   }
+   else if (user && valid_stack_access(fault_addr, f->esp)) {
+    struct sup_page_table_entry *new_spte =
+        malloc(sizeof *new_spte);
+      if (new_spte == NULL) {
+         thread_exit(); //out of memory 
+         NOT_REACHED();
+      }
+      new_spte->vaddr = page_addr;
+      new_spte->writable = true;
+      new_spte->status = NOT_LOADED;
+      new_spte->source = SOURCE_ZERO;
+      lock_init(&new_spte->page_lock);
+      if (!sup_page_table_insert(&thread_current()->spt, new_spte)) {
+         free(new_spte);
+         thread_exit(); //insertion failed
+         NOT_REACHED();
+      }
+      lock_acquire(&new_spte->page_lock);
+      if (!load_page(new_spte)) {
+         lock_release(&new_spte->page_lock);
+         free(new_spte);
+         thread_exit(); //loading failed
+         NOT_REACHED();
+      }
+      lock_release(&new_spte->page_lock);
+      return;
+   }
+  }
+#endif
+
+   /* Page fault could not be handled - terminate process */
 
   // case two: the user process is causing page fault
   if (user) {
@@ -166,21 +264,25 @@ page_fault (struct intr_frame *f)
    
    thread_exit();
    NOT_REACHED();
+  } else {
+   // case three: if we get here, then the kernel is accessing 
+   // kernel memory improperly somehow
+   PANIC ("Kernel page fault at %p", fault_addr);
   }
-
-  // case three: if we get here, then the kernel is accessing 
-  // kernel memory improperly somehow
-  PANIC ("Kernel page fault at %p", fault_addr);
-
-
-//   /* To implement virtual memory, delete the rest of the function
-//      body, and replace it with code that brings in the page to
-//      which fault_addr refers. */
-//   printf ("Page fault at %p: %s error %s page in %s context.\n",
-//           fault_addr,
-//           not_present ? "not present" : "rights violation",
-//           write ? "writing" : "reading",
-//           user ? "user" : "kernel");
-//   kill (f);
 }
 
+bool
+valid_stack_access(void *fault_addr, void *esp) {
+   size_t stack_extension = 0;
+#ifdef VM
+   stack_extension = (size_t) MAX_STACK_SIZE;
+#endif
+   uintptr_t f = (uintptr_t) fault_addr;
+   uintptr_t s = (uintptr_t) esp;
+   uintptr_t limit = (uintptr_t) (PHYS_BASE - stack_extension);
+
+    return is_user_vaddr(fault_addr) &&
+           f >= s - 32 &&
+           f >= limit && 
+           f < (uintptr_t) PHYS_BASE;
+}

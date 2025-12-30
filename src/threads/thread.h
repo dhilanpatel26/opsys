@@ -6,6 +6,12 @@
 #include <stdint.h>
 #include "filesys/filesys.h"
 #include "filesys/file.h"
+#include "lib/kernel/hash.h"
+
+#ifdef VM
+#include "vm/page.h"
+#include "vm/mmap.h"
+#endif
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -105,8 +111,18 @@ struct thread
     struct file *fd_table[FILE_TABLE_SIZE];   /* File descriptor table. */
 #endif
 
+#ifdef VM
+   struct hash spt;                   /* Supplemental page table. */
+   void *esp;
+
+   /* Memory mapped files */
+   struct list mmap_list;        /* List of memory mapped files */
+   mapid_t next_mapid;           /* Next mapping ID to assign */
+#endif
+
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */
+
   };
 
 /* If false (default), use round-robin scheduler.

@@ -13,6 +13,11 @@
 #include "threads/vaddr.h"
 #ifdef USERPROG
 #include "userprog/process.h"
+#ifdef VM
+#include "vm/frame.h"
+#include "vm/mmap.h"
+#include "vm/page.h"
+#endif
 #endif
 
 /* Random value for struct thread's `magic' member.
@@ -110,6 +115,7 @@ thread_init (void)
     list_init(&initial_pd.children);
     initial_thread->procdesc = &initial_pd;
   #endif
+
 }
 
 /* Starts preemptive thread scheduling by enabling interrupts.
@@ -210,6 +216,11 @@ thread_create (const char *name, int priority,
   sf->eip = switch_entry;
   sf->ebp = 0;
 
+  /* Add after other initializations, before returning the tid */
+  #ifdef VM
+    mmap_init(t);
+  #endif
+
   /* Add to run queue. */
   thread_unblock (t);
 
@@ -296,6 +307,10 @@ thread_exit (void)
 
 #ifdef USERPROG
   process_exit ();
+#endif
+
+#ifdef VM
+  sup_page_table_destroy(&thread_current()->spt);
 #endif
 
   /* Remove thread from all threads list, set our status to dying,
@@ -482,6 +497,13 @@ init_thread (struct thread *t, const char *name, int priority)
   }
   #endif
 
+  #ifdef VM
+  /* Initial thread was already taken care of in init.c */
+  if (t != initial_thread) {
+    sup_page_table_init(&t->spt);
+  }
+  #endif
+
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);
   intr_set_level (old_level);
@@ -578,10 +600,13 @@ schedule (void)
   ASSERT (cur->status != THREAD_RUNNING);
   ASSERT (is_thread (next));
 
+  // FAULTING HERE
   if (cur != next)
     prev = switch_threads (cur, next);
   thread_schedule_tail (prev);
 }
+
+// *0x8049db2
 
 /* Returns a tid to use for a new thread. */
 static tid_t

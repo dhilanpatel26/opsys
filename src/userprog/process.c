@@ -24,6 +24,11 @@
 #include "threads/malloc.h"
 #include "threads/synch.h"
 
+#ifdef VM
+#include "vm/page.h"
+#include "vm/frame.h"
+#endif
+
 extern struct lock filesys_lock;
 
 static thread_func start_process NO_RETURN;
@@ -102,8 +107,6 @@ process_execute (const char *file_name)
 
   // transfer ownership of pi to child
   
-  
-
   // wait for child to finish loading
   sema_down(&pi->load_sema);
 
@@ -144,6 +147,8 @@ start_process (void *aux)
   struct intr_frame if_;
   bool success;
 
+  // printf("DEBUG: Starting process %s with tid %d\n", file_name, cur->tid);
+
   /* Initialize interrupt frame and load executable. */
   memset (&if_, 0, sizeof if_);
   if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
@@ -163,8 +168,17 @@ start_process (void *aux)
   /* If load failed, quit. */
   if (!success) {
     pd->exited = true;
+    // printf("DEBUG: Load failed for process with tid %d\n", cur->tid);
     thread_exit ();
   }
+
+  #ifdef VM
+  void *f = frame_lookup(((uint8_t *) PHYS_BASE) - PGSIZE);
+  // printf("DEBUG: f = %p\n", f);
+  frame_unpin(f);
+  #endif
+
+  // printf("DEBUG: Load successful for process with tid %d\n", cur->tid);
 
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
@@ -215,6 +229,7 @@ process_wait (tid_t child_tid)
   }
 
   // parent block AND exit status synch between parent and child
+
   sema_down(&childpd->wait_sema);
 
   // for debugging
@@ -232,6 +247,16 @@ process_exit (void)
 {
   struct thread *cur = thread_current ();
   uint32_t *pdir;
+  static struct lock exit_lock;
+  static bool exit_lock_init = false;
+
+  if (!exit_lock_init) {
+    lock_init(&exit_lock);
+    exit_lock_init = true;
+  }
+
+
+  lock_acquire(&exit_lock);
 
   if (cur->executable != NULL) {
     lock_acquire(&filesys_lock);
@@ -240,6 +265,11 @@ process_exit (void)
     lock_release(&filesys_lock);
     cur->executable = NULL;
   }
+
+#ifdef VM
+  mmap_remove_all();
+  frame_free_thread_frames(thread_current());
+#endif
 
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
@@ -270,12 +300,13 @@ process_exit (void)
   struct process_descriptor *procdesc = cur->procdesc;
   ASSERT (procdesc != NULL);
 
-  // TODO: may have to omit args, depending on how
-  // file_name was processed in process_execute
   if (!procdesc->exited) {
     printf("%s: exit(%d)\n", thread_name(), procdesc->exit_status);
     procdesc->exited = true;
   }
+
+  /* Don't allow an exiting thread to get pre-empted (even by a duplicate exit call!) */
+  enum intr_level old_level = intr_disable();
 
   sema_up(&procdesc->wait_sema);
 
@@ -290,7 +321,6 @@ process_exit (void)
     bool child_should_free = (childpd->ref_count == 0);
     lock_release(&childpd->ref_lock);
 
-    // is this even necessary? list gets destroyed anwyways
     list_remove(e);
   
     if (child_should_free) {
@@ -307,6 +337,11 @@ process_exit (void)
     free(procdesc);
   }
 
+  intr_set_level(old_level);
+
+
+
+  lock_release(&exit_lock);
 }
 
 /* Sets up the CPU for running user code in the current
@@ -598,7 +633,10 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
   ASSERT (pg_ofs (upage) == 0);
   ASSERT (ofs % PGSIZE == 0);
 
+#ifndef VM
   file_seek (file, ofs);
+  // fails userprog if you comment this out. May be file pointer issue.
+#endif
   while (read_bytes > 0 || zero_bytes > 0) 
     {
       /* Calculate how to fill this page.
@@ -607,6 +645,38 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
       size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
       size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
+#ifdef VM /* VM code, load pages lazily */
+      /* Don't load page yet, just record in SPT with IN_FILESYS tag */
+      struct sup_page_table_entry *spte = malloc(sizeof(struct sup_page_table_entry));
+      if (spte == NULL) {
+        return false;
+      }
+
+      // TODO: Must be careful of synchronizing.
+
+      /* Set up SPT entry */
+      spte->vaddr = upage; // user virtual address
+      spte->writable = writable;
+      spte->status = IN_FILESYS; // where to look on page fault
+      spte->source = page_read_bytes == 0 ? SOURCE_ZERO : SOURCE_FILE;
+      lock_init(&spte->page_lock);
+      spte->file = file_reopen(file); // new reference to the file, file* may not be positioned correctly
+      spte->file_offset = ofs;
+      spte->read_bytes = page_read_bytes;
+      spte->zero_bytes = page_zero_bytes;
+      if (spte->file == NULL) {
+        free(spte);
+        return false;
+      }
+
+      /* Insert into SPT */
+      if (!sup_page_table_insert(&thread_current()->spt, spte)) {
+        if (spte->file != NULL)
+          file_close(spte->file);
+        free(spte);
+        return false;
+      }
+#else /* Original code, allocate pages immediately */
       /* Get a page of memory. */
       uint8_t *kpage = palloc_get_page (PAL_USER);
       if (kpage == NULL)
@@ -626,11 +696,13 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
           palloc_free_page (kpage);
           return false; 
         }
+#endif
 
       /* Advance. */
       read_bytes -= page_read_bytes;
       zero_bytes -= page_zero_bytes;
       upage += PGSIZE;
+      ofs += page_read_bytes; // make sure to advance offset in file for next page!
     }
   return true;
 }
@@ -638,18 +710,16 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 static bool
 setup_stack_args_helper (void **esp, const char *file_name) 
 {
-  char *fn_copy = palloc_get_page(0);
-  if (fn_copy == NULL) {
-    return false;
-  }
-
-  strlcpy(fn_copy, file_name, PGSIZE);
-
   char *token;
   char *save_ptr;
 
   int argc = 0;
   char *argv[32];
+  char *fn_copy = malloc(strlen(file_name) + 1);
+  if (fn_copy == NULL) {
+    return false;
+  }
+  strlcpy(fn_copy, file_name, strlen(file_name) + 1);
 
   for (token = strtok_r(fn_copy, " ", &save_ptr); token != NULL; 
   token = strtok_r(NULL, " ", &save_ptr)) {
@@ -657,7 +727,13 @@ setup_stack_args_helper (void **esp, const char *file_name)
       palloc_free_page(fn_copy);
       return false;
     }
-    argv[argc] = token;
+
+    if (token == NULL || strlen(token) == 0) {
+      argv[argc] = "";
+    } else {
+      argv[argc] = token;
+    }
+
     argc++;
   
   }
@@ -665,6 +741,9 @@ setup_stack_args_helper (void **esp, const char *file_name)
   // the total size needed for the strings
   size_t total_size = 0;
   for (int i = 0; i < argc; i++) {
+    if (argv[i] == NULL) {
+      argv[i] = "";
+    }
     total_size += strlen(argv[i]) + 1;
 
   }
@@ -688,7 +767,12 @@ setup_stack_args_helper (void **esp, const char *file_name)
   char *arg_addrs[argc];
   for (int i = argc - 1; i >= 0; i--) {
     size_t len = strlen(argv[i]) + 1;
+    if ((uint32_t)*esp - len < ((uint32_t)*esp & ~(PGSIZE - 1))) {
+      *esp = (void *)((uint32_t)(*esp) & ~(PGSIZE - 1));
+    }
+
     *esp -= len;
+    // printf("Copying argument %d: '%s' to stack at %p\n", i, argv[i], *esp);
     strlcpy(*esp, argv[i], len);
     arg_addrs[i] = *esp;
   }
@@ -704,7 +788,6 @@ setup_stack_args_helper (void **esp, const char *file_name)
     *(char**)*esp = arg_addrs[i];
   }
 
-
   // Push argv
   char **argv_addr = *esp;
   *esp -= 4;
@@ -716,19 +799,15 @@ setup_stack_args_helper (void **esp, const char *file_name)
 
   // Push fake return address
   *esp -= 4;
-  *(void**)*esp = NULL;
+  *(void**)*esp = (void*)0;
 
-  palloc_free_page(fn_copy);
+  free(fn_copy);
 
-  // print out stack contents for debugging purposes
   // printf("Arguments setup complete. Stack contents:\n");
   // hex_dump((uintptr_t)*esp, *esp, PHYS_BASE - *esp, true);
 
   return true;
 }
-
-
-
 
 /* Create a minimal stack by mapping a zeroed page at the top of
    user virtual memory. */
@@ -737,18 +816,72 @@ setup_stack (void **esp, const char *file_name)
 {
   uint8_t *kpage;
   bool success = false;
+  
+#ifdef VM
+  char *fn_copy = malloc(strlen(file_name) + 1);
+  if (fn_copy == NULL) {
+    return false;
+  }
+  strlcpy(fn_copy, file_name, strlen(file_name) + 1);
 
+  struct sup_page_table_entry *spte = malloc(sizeof(struct sup_page_table_entry));
+  if (spte == NULL) {
+    free(fn_copy);
+    return false;
+  }
+  spte->vaddr = ((uint8_t *) PHYS_BASE) - PGSIZE;
+  spte->writable = true;
+  spte->status = IN_MEMORY;
+  spte->source = SOURCE_ZERO;
+  lock_init(&spte->page_lock);
+
+  kpage = frame_allocate(PAL_USER | PAL_ZERO, spte); // implicitly registers
+  if (kpage == NULL) {
+    printf("Failed to allocate stack frame\n");
+    free(spte);
+    free(fn_copy);
+    return false;
+  }
+
+  // printf("File name after frame allocation: %s\n", fn_copy);
+
+  success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
+  if (!success) {
+    printf("Failed to install stack page\n");
+    free(spte);
+    frame_free(kpage);
+    free(fn_copy);
+    return false;
+  }
+  
+  *esp = PHYS_BASE;
+
+  if (!sup_page_table_insert(&thread_current()->spt, spte)) {
+    printf("Failed to insert stack SPT entry\n");
+    free(spte);
+    frame_free(kpage);
+    free(fn_copy);
+    return false;
+  }
+
+  success = setup_stack_args_helper(esp, fn_copy);
+  free(fn_copy);
+#else
   kpage = palloc_get_page (PAL_USER | PAL_ZERO);
-  if (kpage != NULL) 
+  if (kpage == NULL) 
     {
-      success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
-      if (success) {
-        *esp = PHYS_BASE;
-        success = setup_stack_args_helper(esp, file_name);
-      }
-      else
-        palloc_free_page (kpage);
+      printf("Failed to allocate stack page\n");
+      return false;
     }
+  success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
+  if (success) {
+    *esp = PHYS_BASE;
+    success = setup_stack_args_helper(esp, file_name);
+  } else {
+    printf("Failed to install stack page\n");
+    palloc_free_page (kpage);
+  }
+#endif
   return success;
 }
 

@@ -51,11 +51,22 @@ sort_chunks (const char *subprocess, int exit_status)
 
       /* Write this chunk to a file. */
       snprintf (fn, sizeof fn, "buf%zu", i);
+
+      // printf("DEBUG: Creating chunk file in proc %zu: %s\n", i, fn);
+
       create (fn, CHUNK_SIZE);
       quiet = true;
       CHECK ((handle = open (fn)) > 1, "open \"%s\"", fn);
+
+      // printf("DEBUG: Writing to chunk file in proc %zu: %s\n", i, fn);
+
       write (handle, buf1 + CHUNK_SIZE * i, CHUNK_SIZE);
+
+      // printf("DEBUG: Closing chunk file in proc %zu: %s\n", i, fn);
+
       close (handle);
+
+      // printf("DEBUG: Chunk operations successful in proc %zu: %s\n", i, fn);
 
       /* Sort with subprocess. */
       snprintf (cmd, sizeof cmd, "%s %s", subprocess, fn);

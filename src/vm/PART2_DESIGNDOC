@@ -1,0 +1,150 @@
+          +----------------------------+
+          | CS 318                     |
+          | PROJECT 3b: VIRTUAL MEMORY |
+          | DESIGN DOCUMENT            |
+          +----------------------------+
+
+---- GROUP ----
+
+>> Fill in the names and email addresses of your group members.
+
+Jennifer Ye <jye37@jhu.edu>
+Dhilan Patel <dpatel93@jhu.edu>
+Katherine Forbes <kforbes6@jhu.edu>
+
+---- PRELIMINARIES ----
+
+>> If you have any preliminary comments on your submission, notes for the
+>> TAs, or extra credit, please give them here.
+
+>> Please cite any offline or online sources you consulted while
+>> preparing your submission, other than the Pintos documentation, course
+>> text, lecture notes, and course staff.
+GitHub Copilot for code completion.
+
+          STACK GROWTH
+          =====================
+
+---- DATA STRUCTURES ----
+
+>> A1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+Added to struct thread in thread.h:
+- void *esp;
+  - Purpose: Saves user stack pointer during syscall entry to support stack growth on kernel-mode. 
+    We set thread_current()->esp = f->esp in the page fault handler to ensure proper validation.
+
+Added to syscall.h:
+- #define MAX_STACK_SIZE (8 * 1024 * 1024)
+  - Purpose: Defines an 8 MB upper limit on user stack size to prevent unbounded growth and kernel memory exhaustion.
+
+---- ALGORITHMS ----
+
+>> A2: Explain your heuristic for deciding whether a page fault for an
+>> invalid virtual address should cause the stack to be extended into
+>> the page that faulted.
+
+We define a heuristic valid_stack_access. There, it checks 
+1) Fault address is in the user address space.
+2) The fault is close enough to the current stack pointer (within 32 bytes) because a legitimate access 
+   like PUSH/PUSHA will require at most that much memory before a page fault.
+3) The attempt is at most 8MB stack from physical base (a valid allocation within stack limit).
+
+          MEMORY MAPPED FILES
+          ===================
+
+---- DATA STRUCTURES ----
+
+>> B1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+- struct list mmap_list;
+  - Purpose: Linked list of memory-mapped files, updated on mmap/munmap system calls. Traversed during 
+    process exit to clean up all currently mapped files.
+
+- mapid_t next_mapid;
+  - Purpose: Incrementing index to uniquely identify an mmap entry. Used for mmap entry lookup in 
+    various functions.
+
+Added to mmap.h:
+- typedef int mapid_t;
+  - Purpose: Define a datatype for tracking unique indexes of mmap entries in a thread's mmap list.
+
+- struct mmap_entry {
+    mapid_t mapid;                // Mapping ID
+    struct file *file;            // File being mapped
+    void *addr;                   // Starting virtual address
+    size_t page_count;            // Number of pages in mapping
+    struct list_elem elem;        // List element for thread's mmap_list
+  };
+  - Purpose: Stores metadata about an mmap list entry that is necessary for mapping initialization, lookup, 
+    write-back, and teardown. Contains a list element to be a valid entry in the linked list data structure.
+
+Added to mmap.c:
+- extern struct lock filesys_lock;
+  - Purpose: Accessing global variable filesys_lock to atomically perform file system operations.
+
+---- ALGORITHMS ----
+
+>> B2: Describe how memory mapped files integrate into your virtual
+>> memory subsystem.  Explain how the page fault and eviction
+>> processes differ between swap pages and other pages.
+
+We use the same frame table and page table structure as before. When a page fault happens for a mmapped file, the page 
+is loaded from the file into a frame and the frame gets mapped into the process's address space. The page gets marked with 
+its current status IN_MEMORY and its source as SOURCE_MMAP, meaning a memory-mapped file-backed page. This distinction is 
+necessary because of the differing processes for frame evictions between traditional swap pages and mmapped pages. Assuming the 
+page is dirty, swap pages get written to the swap space on disk with a status IN_SWAP (eventually getting updated to IN_FILESYS 
+when written back), while mmapped pages immediately get written back to their file's location on disk with an IN_FILESYS staus. 
+No writing action needs to take place with a clean page. The page fault handling process is the same for written-back swap pages 
+and evicted mmapped pages, since they both have an IN_FILESYS status. The only difference is that an evicted swap pages will be 
+loaded directly from swap if they have not yet been written back (marked with an IN_SWAP status).
+
+>> B3: Explain how you determine whether a new file mapping overlaps
+>> any existing segment.
+
+We check the new mapping's virtual address range to see if it overlaps other mmapped files or other segments existing in the process's 
+address space. We also use our SPT to track the mapped regions. This makes sure that our new mapping doesn't overwrite valid pages.
+
+---- RATIONALE ----
+
+>> B4: Mappings created with "mmap" have similar semantics to those of
+>> data demand-paged from executables, except that "mmap" mappings are
+>> written back to their original files, not to swap.  This implies
+>> that much of their implementation can be shared.  Explain why your
+>> implementation either does or does not share much of the code for
+>> the two situations.
+
+We share a lot of code between mmap and executable pages. We use the same frame allocation and eviction policies as well as the same 
+page table and frame table set-up. The main difference is the way that changes are written back. We write back mmaped pages to the source 
+files, and executable pages to swap space (where they may be written back to their file on disk later). The eviction process is very similar 
+between these two situations. We handle mmapped file write-back in a SOURCE_MMAP control flow in frame.c's frame_evict() that provides an 
+alternate path to the default write-to-swap (assuming the page is dirty). In the page fault handler's load_page, no additional code was required 
+to handle mmapped pages, because upon eviction they are marked with an IN_FILESYS status and will be handled like swap pages that were written back.
+
+          SURVEY QUESTIONS
+          ================
+
+Answering these questions is optional, but it will help us improve the
+course in future quarters.  Feel free to tell us anything you
+want--these questions are just to spur your thoughts.  You may also
+choose to respond anonymously in the course evaluations at the end of
+the quarter.
+
+>> In your opinion, was this assignment, or any one of the three problems
+>> in it, too easy or too hard?  Did it take too long or too little time?
+
+>> Did you find that working on a particular part of the assignment gave
+>> you greater insight into some aspect of OS design?
+
+>> Is there some particular fact or hint we should give students in
+>> future quarters to help them solve the problems?  Conversely, did you
+>> find any of our guidance to be misleading?
+
+>> Do you have any suggestions for the TAs to more effectively assist
+>> students, either for future quarters or the remaining projects?
+
+>> Any other comments?
